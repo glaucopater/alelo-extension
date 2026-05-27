@@ -1,0 +1,63 @@
+<div id="image-analyzer-overlay">
+  <div id="image-analyzer-modal" role="dialog" aria-modal="true">
+    <button id="image-analyzer-close" aria-label="Close">×</button>
+    <div id="image-analyzer-header">
+      <div>
+        <h2>Glowing Monocle 🔎</h2>
+        <p id="ia-extension-version" class="ia-version" aria-label="Extension version"></p>
+      </div>
+      <div id="image-analyzer-header-actions">
+        <button type="button" id="ia-run-btn" class="ia-btn ia-icon-btn" aria-label="Run analysis" title="Run analysis" disabled>↻</button>
+        <button type="button" id="ia-copy-btn" class="ia-btn ia-icon-btn" aria-label="Copy JSON" title="Copy JSON">⎘</button>
+        <button type="button" id="ia-tab-formatted" class="ia-btn ia-icon-btn ia-tab-active" aria-label="Formatted view" title="Formatted">▤</button>
+        <button type="button" id="ia-tab-raw" class="ia-btn ia-icon-btn" aria-label="Raw JSON view" title="Raw JSON">{ }</button>
+        <button type="button" id="ia-history-btn" class="ia-btn ia-icon-btn" aria-label="History" title="History">⌛</button>
+        <button type="button" id="ia-settings-btn" class="ia-btn ia-icon-btn" aria-label="Settings" title="Settings">⚙</button>
+        <span id="ia-action-status" class="ia-action-status"></span>
+      </div>
+    </div>
+
+    <div id="ia-history-panel" class="ia-hidden">
+      <div class="ia-panel-header">
+        <h3>History</h3>
+        <button type="button" id="ia-history-clear-btn" class="ia-btn ia-btn-small">Clear all</button>
+      </div>
+      <div id="ia-history-list"></div>
+      <p id="ia-history-empty" class="ia-history-empty ia-hidden">No previous analyses saved yet.</p>
+    </div>
+
+    <div id="ia-settings-panel" class="ia-hidden">
+      <h3>Settings</h3>
+      <label class="ia-field">
+        <span>API URL</span>
+        <input type="url" id="ia-config-api-url" placeholder="http://localhost:11434/api/chat" />
+      </label>
+      <label class="ia-field">
+        <span>Model</span>
+        <input type="text" id="ia-config-model" placeholder="gemma4:e2b" />
+      </label>
+      <label class="ia-field">
+        <span>Auth token (optional)</span>
+        <input type="password" id="ia-config-auth-token" placeholder="Leave empty if not required" autocomplete="off" />
+      </label>
+      <div class="ia-settings-actions">
+        <button type="button" id="ia-config-save-btn" class="ia-btn ia-btn-primary">Save</button>
+        <span id="ia-config-status"></span>
+      </div>
+    </div>
+
+    <div id="ia-image-preview-wrap" class="ia-hidden">
+      <img id="ia-image-preview" class="ia-image-preview" alt="Analyzed image preview" referrerpolicy="no-referrer" />
+    </div>
+
+    <div id="image-analyzer-image-url"></div>
+
+    <div id="image-analyzer-spinner" class="ia-hidden" aria-label="Analyzing image">
+      <div class="ia-spinner"></div>
+    </div>
+
+    <div id="image-analyzer-error" class="ia-error-panel ia-hidden"></div>
+    <div id="image-analyzer-formatted" class="ia-panel ia-markdown"></div>
+    <pre id="image-analyzer-raw" class="ia-panel ia-hidden"></pre>
+  </div>
+</div>
