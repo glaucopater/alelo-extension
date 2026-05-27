@@ -49,14 +49,19 @@ function validateFavoriteLanguages(favoriteLanguages) {
   return normalized;
 }
 
-function findLanguageByCode(code) {
-  const normalizedCode = normalizeLanguageCode(code);
-  return (
-    LANGUAGES_PRESET.find((lang) => normalizeLanguageCode(lang.code) === normalizedCode) || {
-      code: normalizedCode,
-      label: normalizedCode
-    }
-  );
+function findLanguageByCode(codeOrLabel) {
+  const raw = String(codeOrLabel || "").trim();
+  const normalizedCode = normalizeLanguageCode(raw);
+  const byCode = LANGUAGES_PRESET.find((lang) => normalizeLanguageCode(lang.code) === normalizedCode);
+  if (byCode) return { ...byCode };
+
+  const byLabel = LANGUAGES_PRESET.find((lang) => lang.label.toLowerCase() === raw.toLowerCase());
+  if (byLabel) return { ...byLabel };
+
+  return {
+    code: normalizedCode,
+    label: raw || normalizedCode
+  };
 }
 
 function isFullPresetFavoriteList(favoriteLanguages) {

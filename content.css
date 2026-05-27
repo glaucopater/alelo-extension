@@ -140,7 +140,92 @@
   font-size: 13px;
   font-weight: 600;
   color: #222;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.alelo-lang-arrow {
+  color: #666;
+  font-weight: 700;
+  padding: 0 2px;
+}
+
+.alelo-lang-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.alelo-lang-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.alelo-lang-chip-label {
+  white-space: nowrap;
+}
+
+.alelo-history-snippet {
+  color: #444;
+  font-weight: 500;
+}
+
+.alelo-source-lang-pending {
+  color: #666;
+  font-weight: 500;
+  font-style: italic;
+}
+
+.alelo-flag-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.alelo-flag {
+  display: inline-block;
+  width: auto;
+  height: auto;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 2px;
+  object-fit: cover;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.alelo-flag-missing {
+  display: inline-block;
+  width: 20px;
+  height: 15px;
+  border: 1px dashed #ccc;
+  border-radius: 2px;
+  background: #f5f5f5;
+  flex-shrink: 0;
+}
+
+.alelo-translation-card-title,
+.alelo-favorite-label,
+.alelo-history-title,
+.alelo-lang-picker-option,
+.alelo-lang-picker-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.alelo-flag-attribution a {
+  color: #0b57d0;
+  text-decoration: none;
+}
+
+.alelo-flag-attribution a:hover {
+  text-decoration: underline;
 }
 
 .alelo-page-source {
@@ -407,18 +492,19 @@
 .alelo-favorites-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-bottom: 10px;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
 .alelo-favorite-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   background: white;
   border: 1px solid #e0e0e0;
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 12px 14px;
+  min-height: 48px;
 }
 
 .alelo-favorite-label {
@@ -441,9 +527,94 @@
 .alelo-favorites-custom {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
+}
+
+.alelo-lang-picker {
+  position: relative;
+  flex: 1;
+  min-width: 180px;
+}
+
+.alelo-lang-picker-trigger {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: white;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.alelo-lang-picker-trigger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.alelo-lang-picker-value {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.alelo-lang-picker-value > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alelo-lang-picker-placeholder {
+  color: #666;
+}
+
+.alelo-lang-picker-chevron {
+  color: #666;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.alelo-lang-picker-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  background: white;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  z-index: 10;
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+
+.alelo-lang-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.alelo-lang-picker-option:hover,
+.alelo-lang-picker-option.alelo-selected {
+  background: #f0f4ff;
+}
+
+.alelo-lang-picker-empty {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: #666;
 }
 
 .alelo-favorites-custom input {

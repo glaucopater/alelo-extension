@@ -1,4 +1,29 @@
-importScripts("constants.js", "config.js");
+importScripts("constants.js", "config.js", "language-flags.js");
+
+const flagImageCache = new Map();
+
+async function fetchFlagDataUrl(langCode, width = 20) {
+  const url = getLanguageFlagUrl(langCode, width);
+  if (!url) return null;
+
+  if (flagImageCache.has(url)) {
+    return flagImageCache.get(url);
+  }
+
+  const response = await fetch(url);
+  if (!response.ok) return null;
+
+  const blob = await response.blob();
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+
+  flagImageCache.set(url, dataUrl);
+  return dataUrl;
+}
 
 function languageMenuId(code) {
   return `${CONTEXT_MENU_LANG_PREFIX}${normalizeLanguageCode(code).replace(/[^a-zA-Z0-9-]/g, "_")}`;
@@ -9,10 +34,54 @@ function menuIdToLanguageCode(menuItemId) {
   return menuItemId.slice(CONTEXT_MENU_LANG_PREFIX.length).replace(/_/g, "-");
 }
 
-function buildUserPrompt(sourceText, targetLanguage) {
+function buildUserPrompt(sourceText, targetLanguage, sourceLanguage) {
   const label = targetLanguage?.label || targetLanguage?.code || "target language";
   const code = targetLanguage?.code || label;
-  return `Translate the following text to ${label} (${code}):\n\n${sourceText}`;
+  const sourceHint = sourceLanguage?.label
+    ? `The text is in ${sourceLanguage.label} (${sourceLanguage.code}). `
+    : "";
+  return `${sourceHint}Translate the following text to ${label} (${code}):\n\n${sourceText}`;
+}
+
+function buildSourceLanguagePrompt(sourceText) {
+  return `What language is this text?\n\n${sourceText}`;
+}
+
+function parseSourceLanguageResponse(text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return null;
+
+  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+  const jsonStr = jsonMatch ? jsonMatch[0] : trimmed;
+
+  try {
+    const parsed = JSON.parse(jsonStr);
+    const code = parsed.code || parsed.language || parsed.lang;
+    const labelHint = parsed.label || parsed.name;
+    if (!code && !labelHint) return null;
+
+    let entry = findLanguageByCode(code || labelHint);
+    if (
+      labelHint &&
+      !LANGUAGES_PRESET.some((lang) => normalizeLanguageCode(lang.code) === normalizeLanguageCode(entry.code))
+    ) {
+      entry = findLanguageByCode(labelHint);
+    }
+
+    const label = String(labelHint || entry.label || entry.code).trim();
+    return normalizeLanguageEntry({ code: entry.code, label: label || entry.label });
+  } catch {
+    if (/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/i.test(trimmed)) {
+      return normalizeLanguageEntry(findLanguageByCode(trimmed));
+    }
+
+    const byName = findLanguageByCode(trimmed);
+    if (byName && LANGUAGES_PRESET.some((lang) => normalizeLanguageCode(lang.code) === normalizeLanguageCode(byName.code))) {
+      return normalizeLanguageEntry(byName);
+    }
+
+    return null;
+  }
 }
 
 function formatErrorMessage(error, context = {}) {
@@ -69,7 +138,7 @@ function formatErrorMessage(error, context = {}) {
 async function injectContentScript(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: ["constants.js", "content.js"]
+    files: ["constants.js", "language-flags.js", "content.js"]
   });
 }
 
@@ -125,19 +194,24 @@ async function showError(tabId, payload) {
   });
 }
 
-async function requestTranslation(config, sourceText, targetLanguage) {
-  const targetLang = normalizeLanguageEntry(targetLanguage);
-  if (!targetLang) {
-    throw new Error("Invalid target language");
-  }
+async function updateSourceLanguage(tabId, payload) {
+  await injectContentScript(tabId);
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (data, hookName) => {
+      if (window[hookName]) {
+        window[hookName](data);
+      }
+    },
+    args: [payload, CONTENT_GLOBAL.UPDATE_SOURCE_LANGUAGE]
+  });
+}
 
+async function chatCompletion(config, messages) {
   const payload = {
     model: config.model,
     stream: false,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: buildUserPrompt(sourceText, targetLang) }
-    ]
+    messages
   };
 
   const headers = { "Content-Type": "application/json" };
@@ -157,21 +231,46 @@ async function requestTranslation(config, sourceText, targetLanguage) {
     throw new Error(`Ollama error ${response.status}: ${raw || "No response body"}`);
   }
 
-  let translatedText = raw;
+  let content = raw;
   let rawJsonText = raw;
 
   try {
     const parsed = JSON.parse(raw);
     rawJsonText = JSON.stringify(parsed, null, 2);
-    translatedText = parsed?.message?.content ?? raw;
+    content = parsed?.message?.content ?? raw;
   } catch {
     rawJsonText = raw;
-    translatedText = raw;
+    content = raw;
   }
 
   return {
+    content: String(content || "").trim(),
+    rawJsonText
+  };
+}
+
+async function requestSourceLanguage(config, sourceText) {
+  const { content } = await chatCompletion(config, [
+    { role: "system", content: SOURCE_LANGUAGE_SYSTEM_PROMPT },
+    { role: "user", content: buildSourceLanguagePrompt(sourceText) }
+  ]);
+  return parseSourceLanguageResponse(content);
+}
+
+async function requestTranslation(config, sourceText, targetLanguage, sourceLanguage = null) {
+  const targetLang = normalizeLanguageEntry(targetLanguage);
+  if (!targetLang) {
+    throw new Error("Invalid target language");
+  }
+
+  const { content, rawJsonText } = await chatCompletion(config, [
+    { role: "system", content: SYSTEM_PROMPT },
+    { role: "user", content: buildUserPrompt(sourceText, targetLang, sourceLanguage) }
+  ]);
+
+  return {
     targetLanguage: targetLang,
-    translatedText: String(translatedText || "").trim(),
+    translatedText: content,
     rawJsonText
   };
 }
@@ -222,11 +321,35 @@ async function translateLanguages(tabId, sourceText, targetLanguages, pageUrl) {
 
     config = await getStoredConfig();
 
+    const sourceLanguagePromise = requestSourceLanguage(config, trimmedSource)
+      .then(async (sourceLanguage) => {
+        await updateSourceLanguage(tabId, {
+          sourceText: trimmedSource,
+          sourceLanguage: sourceLanguage || null,
+          targetLanguages: langs,
+          pageUrl: pageUrl || ""
+        });
+        return sourceLanguage;
+      })
+      .catch(async () => {
+        await updateSourceLanguage(tabId, {
+          sourceText: trimmedSource,
+          sourceLanguage: null,
+          targetLanguages: langs,
+          pageUrl: pageUrl || ""
+        });
+        return null;
+      });
+
     if (langs.length === 1) {
       try {
-        const result = await requestTranslation(config, trimmedSource, langs[0]);
+        const [sourceLanguage, result] = await Promise.all([
+          sourceLanguagePromise,
+          requestTranslation(config, trimmedSource, langs[0])
+        ]);
         await showResult(tabId, {
           sourceText: trimmedSource,
+          sourceLanguage,
           targetLanguages: langs,
           pageUrl: pageUrl || "",
           translations: [{ ok: true, ...result }]
@@ -234,6 +357,7 @@ async function translateLanguages(tabId, sourceText, targetLanguages, pageUrl) {
       } catch (error) {
         await showError(tabId, {
           sourceText: trimmedSource,
+          sourceLanguage: await sourceLanguagePromise.catch(() => null),
           targetLanguages: langs,
           pageUrl: pageUrl || "",
           errorInfo: formatErrorMessage(error, { model: config.model })
@@ -244,8 +368,9 @@ async function translateLanguages(tabId, sourceText, targetLanguages, pageUrl) {
 
     const orderedResults = new Array(langs.length);
 
-    await Promise.all(
-      langs.map(async (lang, index) => {
+    await Promise.all([
+      sourceLanguagePromise,
+      ...langs.map(async (lang, index) => {
         let item;
 
         try {
@@ -268,14 +393,16 @@ async function translateLanguages(tabId, sourceText, targetLanguages, pageUrl) {
           translation: item
         });
       })
-    );
+    ]);
 
     const results = orderedResults.filter(Boolean);
     const successes = results.filter((item) => item.ok);
+    const sourceLanguage = await sourceLanguagePromise.catch(() => null);
 
     if (!successes.length) {
       await showError(tabId, {
         sourceText: trimmedSource,
+        sourceLanguage,
         targetLanguages: langs,
         pageUrl: pageUrl || "",
         errorInfo: results[0]?.errorInfo || {
@@ -289,6 +416,7 @@ async function translateLanguages(tabId, sourceText, targetLanguages, pageUrl) {
 
     await showResult(tabId, {
       sourceText: trimmedSource,
+      sourceLanguage,
       targetLanguages: langs,
       pageUrl: pageUrl || "",
       translations: results,
@@ -422,6 +550,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const filtered = history.filter((item) => item.id !== message.id);
       return saveStoredHistory(filtered).then(() => sendResponse({ ok: true, history: filtered }));
     });
+    return true;
+  }
+
+  if (message.action === MESSAGE_ACTION.GET_FLAG_IMAGE) {
+    fetchFlagDataUrl(message.langCode, message.width)
+      .then((dataUrl) => sendResponse({ ok: Boolean(dataUrl), dataUrl: dataUrl || null }))
+      .catch(() => sendResponse({ ok: false, dataUrl: null }));
     return true;
   }
 

@@ -143,6 +143,7 @@ Selected text is sent only to the chat endpoint you configure (by default, your 
 | `config.js` | Default config, language presets, settings/history storage |
 | `content.js` | Modal UI, translation display, history, settings |
 | `content.html` / `content.css` | Modal markup and styles |
+| `language-flags.js` | Language code → flag image URL mapping |
 | `icons/` | Extension and toolbar icons |
 
 ## Troubleshooting
@@ -154,6 +155,10 @@ Selected text is sent only to the chat endpoint you configure (by default, your 
 | **No languages in menu** | Open Settings and save at least one favorite language |
 | **Extension won't load** | Verify all icon PNGs exist under `icons/` |
 | **Context menu missing after update** | Reload the extension on `chrome://extensions/` |
+
+## Credits
+
+Language flag icons in the settings picker, favorites list, translation cards, and history are loaded from [flagcdn.com](https://flagcdn.com), provided by [Flagpedia.net](https://flagpedia.net).
 
 ## License
 

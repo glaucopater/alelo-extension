@@ -43,9 +43,24 @@
       <div class="alelo-field">
         <span>Favorite languages</span>
         <p class="alelo-field-hint">These appear in the right-click menu when you select text.</p>
+        <p class="alelo-field-hint alelo-flag-attribution">
+          Flag icons by <a href="https://flagpedia.net" target="_blank" rel="noopener noreferrer">Flagpedia.net</a>
+        </p>
         <div id="alelo-favorites-list" class="alelo-favorites-list"></div>
         <div class="alelo-favorites-add">
-          <select id="alelo-favorites-preset" class="alelo-select"></select>
+          <div id="alelo-favorites-picker" class="alelo-lang-picker">
+            <button
+              type="button"
+              id="alelo-favorites-picker-trigger"
+              class="alelo-lang-picker-trigger alelo-select"
+              aria-haspopup="listbox"
+              aria-expanded="false"
+            >
+              <span class="alelo-lang-picker-value alelo-lang-picker-placeholder">Add a language…</span>
+              <span class="alelo-lang-picker-chevron" aria-hidden="true">▾</span>
+            </button>
+            <ul id="alelo-favorites-picker-menu" class="alelo-lang-picker-menu alelo-hidden" role="listbox"></ul>
+          </div>
           <button type="button" id="alelo-favorites-add-btn" class="alelo-btn alelo-btn-small">Add</button>
         </div>
         <div class="alelo-favorites-custom">

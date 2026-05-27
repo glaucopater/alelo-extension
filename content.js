@@ -26,7 +26,10 @@
   let configSaveBtn = null;
   let configStatus = null;
   let favoritesList = null;
-  let favoritesPreset = null;
+  let favoritesPicker = null;
+  let favoritesPickerTrigger = null;
+  let favoritesPickerMenu = null;
+  let selectedPresetCode = "";
   let favoritesAddBtn = null;
   let favoritesCustomCode = null;
   let favoritesCustomLabel = null;
@@ -41,6 +44,8 @@
   let currentTranslatedText = "";
   let lastTranslations = [];
   let lastSourceText = "";
+  let lastSourceLanguage = null;
+  let lastSourceLanguagePending = false;
   let lastTargetLang = null;
   let lastRequestedLanguages = [];
   let lastPageUrl = "";
@@ -170,11 +175,13 @@
 
   function historySummary(entry) {
     const parts = [];
+    const source = entry.sourceLanguage?.label || entry.sourceLanguage?.code;
+    if (source) parts.push(source);
     const langs = entry.translations?.length
       ? entry.translations.map((item) => item.targetLanguage?.label || item.targetLanguage?.code).filter(Boolean)
       : [];
     if (langs.length > 1) {
-      parts.push(`${langs.length} languages`);
+      parts.push(`${langs.length} target languages`);
     } else {
       const lang = entry.targetLanguage?.label || entry.targetLanguage?.code || langs[0];
       if (lang) parts.push(lang);
@@ -185,6 +192,16 @@
     const duration = formatDuration(stats?.durationMs);
     if (duration) parts.push(duration);
     return parts.join(" · ") || "Saved translation";
+  }
+
+  function normalizeSourceLanguage(sourceLanguage) {
+    return resolveLanguageEntry(sourceLanguage);
+  }
+
+  function setSourceLanguageState(sourceLanguage, pending = false) {
+    lastSourceLanguage = resolveLanguageEntry(sourceLanguage);
+    lastSourceLanguagePending = pending;
+    updateLanguageRouteDisplay();
   }
 
   function formatLanguageLabels(languages) {
@@ -235,16 +252,177 @@
     return [];
   }
 
+  const FLAG_PLACEHOLDER_PIXEL =
+    "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+
+  const flagDataUrlCache = new Map();
+  const flagLoadPromises = new Map();
+
+  function missingFlagMarkup(width = 20) {
+    const height = Math.round(width * 0.75);
+    return `<span class="alelo-flag alelo-flag-missing" aria-hidden="true" style="width:${width}px;height:${height}px"></span>`;
+  }
+
+  function replaceMissingFlag(img, width = 20) {
+    const span = document.createElement("span");
+    span.className = "alelo-flag alelo-flag-missing";
+    span.setAttribute("aria-hidden", "true");
+    span.style.width = `${width}px`;
+    span.style.height = `${Math.round(width * 0.75)}px`;
+    img.replaceWith(span);
+  }
+
+  async function loadFlagImage(img) {
+    if (!img || img.dataset.flagLoaded === "1" || img.dataset.flagLoading === "1") return;
+
+    const code = img.dataset.flagCode;
+    const width = Number(img.dataset.flagWidth || 20);
+    const flagUrl = code ? getLanguageFlagUrl(code, width) : null;
+    if (!flagUrl) {
+      replaceMissingFlag(img, width);
+      return;
+    }
+
+    img.dataset.flagLoading = "1";
+    const cacheKey = flagUrl;
+
+    try {
+      let dataUrl = flagDataUrlCache.get(cacheKey);
+      if (!dataUrl) {
+        if (!flagLoadPromises.has(cacheKey)) {
+          flagLoadPromises.set(
+            cacheKey,
+            chrome.runtime
+              .sendMessage({
+                action: MESSAGE_ACTION.GET_FLAG_IMAGE,
+                langCode: code,
+                width
+              })
+              .then((response) => (response?.ok ? response.dataUrl : null))
+              .finally(() => flagLoadPromises.delete(cacheKey))
+          );
+        }
+        dataUrl = await flagLoadPromises.get(cacheKey);
+        if (dataUrl) {
+          flagDataUrlCache.set(cacheKey, dataUrl);
+        }
+      }
+
+      if (!img.isConnected) return;
+
+      if (dataUrl) {
+        img.src = dataUrl;
+        img.classList.remove("alelo-flag-pending");
+        img.dataset.flagLoaded = "1";
+      } else {
+        replaceMissingFlag(img, width);
+      }
+    } catch {
+      if (img.isConnected) {
+        replaceMissingFlag(img, width);
+      }
+    } finally {
+      delete img.dataset.flagLoading;
+    }
+  }
+
+  function hydrateLanguageFlags(root) {
+    if (!root) return;
+    root.querySelectorAll("img.alelo-flag-pending[data-flag-code]").forEach((img) => {
+      loadFlagImage(img);
+    });
+  }
+
+  function setupFlagHydration(root) {
+    if (!root || root.__aleloFlagObserver) return;
+    root.__aleloFlagObserver = true;
+
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType !== Node.ELEMENT_NODE) return;
+          if (node.matches?.("img.alelo-flag-pending[data-flag-code]")) {
+            loadFlagImage(node);
+          }
+          node.querySelectorAll?.("img.alelo-flag-pending[data-flag-code]").forEach((img) => {
+            loadFlagImage(img);
+          });
+        });
+      }
+    });
+
+    observer.observe(root, { childList: true, subtree: true });
+    hydrateLanguageFlags(root);
+  }
+
+  function normalizeLanguageCode(code) {
+    return String(code || "")
+      .trim()
+      .replace(/_/g, "-")
+      .split("-")
+      .map((part, index) => (index === 0 ? part.toLowerCase() : part.toUpperCase()))
+      .join("-");
+  }
+
+  function resolveLanguageEntry(lang) {
+    if (!lang) return null;
+
+    if (typeof lang === "string") {
+      const raw = lang.trim();
+      if (!raw) return null;
+      const normalized = normalizeLanguageCode(raw);
+      const byCode = LANGUAGES_PRESET.find((item) => normalizeLanguageCode(item.code) === normalized);
+      if (byCode) return { code: byCode.code, label: byCode.label };
+      const byLabel = LANGUAGES_PRESET.find((item) => item.label.toLowerCase() === raw.toLowerCase());
+      if (byLabel) return { code: byLabel.code, label: byLabel.label };
+      return { code: normalized, label: raw };
+    }
+
+    const code = normalizeLanguageCode(lang.code);
+    if (!code) return null;
+    const preset = LANGUAGES_PRESET.find((item) => normalizeLanguageCode(item.code) === code);
+    const label = String(lang.label || preset?.label || code).trim();
+    return { code: preset?.code || code, label: label || code };
+  }
+
+  function renderLanguageFlag(lang, width = 20) {
+    const entry = resolveLanguageEntry(lang);
+    const code = entry?.code;
+    if (!code || !getLanguageFlagUrl(code, width)) {
+      return missingFlagMarkup(width);
+    }
+
+    const height = Math.round(width * 0.75);
+    return `<img class="alelo-flag alelo-flag-pending" src="${FLAG_PLACEHOLDER_PIXEL}" data-flag-code="${escapeHtml(code)}" data-flag-width="${width}" alt="" width="${width}" height="${height}" />`;
+  }
+
+  function renderLanguageChip(lang, width = 16) {
+    const entry = resolveLanguageEntry(lang);
+    if (!entry) return "";
+    return `<span class="alelo-lang-chip">${renderLanguageFlag(entry, width)}<span class="alelo-lang-chip-label">${escapeHtml(entry.label)}</span></span>`;
+  }
+
+  function renderLanguageChipsRow(languages, width = 16) {
+    const items = (languages || []).map(resolveLanguageEntry).filter(Boolean);
+    if (!items.length) return "";
+    return `<span class="alelo-lang-chips">${items.map((entry) => renderLanguageChip(entry, width)).join("")}</span>`;
+  }
+
+  function setFormattedTranslationsHtml(html) {
+    if (!formattedBox) return;
+    formattedBox.innerHTML = html;
+    hydrateLanguageFlags(formattedBox);
+  }
+
   function languageCardKey(lang) {
     return normalizeLanguageCode(lang?.code || "");
   }
 
   function renderPendingTranslationCard(lang) {
-    const label = lang?.label || lang?.code || "Translation";
     const code = languageCardKey(lang);
     return `
       <div class="alelo-translation-card alelo-translation-card-pending" data-lang-code="${escapeHtml(code)}">
-        <h4 class="alelo-translation-card-title">${escapeHtml(label)}</h4>
+        <h4 class="alelo-translation-card-title">${renderLanguageChip(lang, 16)}</h4>
         <div class="alelo-card-spinner"><div class="alelo-spinner"></div></div>
       </div>`;
   }
@@ -284,18 +462,18 @@
     const nextCard = wrapper.firstElementChild;
     if (nextCard) {
       card.replaceWith(nextCard);
+      hydrateLanguageFlags(formattedBox);
     }
   }
 
   function renderTranslationCard(item) {
-    const label = item.targetLanguage?.label || item.targetLanguage?.code || "Translation";
     const code = languageCardKey(item.targetLanguage);
 
     if (!item.ok) {
       const errorInfo = item.errorInfo || {};
       return `
         <div class="alelo-translation-card alelo-translation-card-error" data-lang-code="${escapeHtml(code)}">
-          <h4 class="alelo-translation-card-title">${escapeHtml(label)}</h4>
+          <h4 class="alelo-translation-card-title">${renderLanguageChip(item.targetLanguage, 16)}</h4>
           <p class="alelo-translation-card-error-text">${escapeHtml(errorInfo.message || "Translation failed")}</p>
         </div>`;
     }
@@ -304,7 +482,7 @@
     const text = String(item.translatedText || "").trim() || "No translation returned";
     return `
       <div class="alelo-translation-card" data-lang-code="${escapeHtml(code)}">
-        <h4 class="alelo-translation-card-title">${escapeHtml(label)}</h4>
+        <h4 class="alelo-translation-card-title">${renderLanguageChip(item.targetLanguage, 16)}</h4>
         ${renderTranslationMeta(stats)}
         <div class="alelo-translation-output">${inlineFormat(text)}</div>
       </div>`;
@@ -343,6 +521,7 @@
   function setRequestedLanguages(languages) {
     lastRequestedLanguages = (languages || []).filter(Boolean);
     lastTargetLang = lastRequestedLanguages[0] || null;
+    updateLanguageRouteDisplay();
   }
 
   function renderTranslationMeta(stats) {
@@ -376,15 +555,27 @@
       </div>`;
   }
 
-  function updateTargetLanguageDisplay(targetLanguages) {
+  function updateLanguageRouteDisplay() {
     if (!targetLangEl) return;
-    const languages = Array.isArray(targetLanguages)
-      ? targetLanguages
-      : targetLanguages
-        ? [targetLanguages]
-        : [];
-    const label = formatLanguageLabels(languages);
-    targetLangEl.textContent = label ? `→ ${label}` : "";
+
+    const targets = lastRequestedLanguages || [];
+    const parts = [];
+
+    if (lastSourceLanguage) {
+      parts.push(renderLanguageChip(lastSourceLanguage, 16));
+    } else if (lastSourceLanguagePending) {
+      parts.push(`<span class="alelo-source-lang-pending">Detecting language…</span>`);
+    }
+
+    const targetPart = renderLanguageChipsRow(targets, 16);
+    if (parts.length && targetPart) {
+      parts.push(`<span class="alelo-lang-arrow">→</span>`, targetPart);
+    } else if (targetPart) {
+      parts.push(targetPart);
+    }
+
+    targetLangEl.innerHTML = parts.join("");
+    hydrateLanguageFlags(targetLangEl);
   }
 
   function updatePageSourceDisplay(pageUrl) {
@@ -440,6 +631,7 @@
     const payload = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       sourceText: entry.sourceText,
+      sourceLanguage: normalizeSourceLanguage(entry.sourceLanguage),
       translations: successes,
       translatedText: buildCopyText(successes),
       targetLanguage: successes[0]?.targetLanguage || null,
@@ -489,24 +681,33 @@
       .map((entry) => {
         const isActive = entry.id === activeHistoryId;
         const translations = normalizeHistoryTranslations(entry);
-        const langLabels = translations
-          .map((item) => item.targetLanguage?.label || item.targetLanguage?.code)
-          .filter(Boolean);
-        const lang =
-          langLabels.length > 1
-            ? `${langLabels.length} languages`
-            : langLabels[0] || entry.targetLanguage?.label || entry.targetLanguage?.code || "?";
+        const flagLangs =
+          translations.length > 1
+            ? translations.map((item) => item.targetLanguage).filter(Boolean)
+            : [entry.targetLanguage || translations[0]?.targetLanguage].filter(Boolean);
         const snippet = truncateText(entry.sourceText, UI_LIMIT.HISTORY_SNIPPET);
+        const routeParts = [];
+        if (entry.sourceLanguage) {
+          routeParts.push(renderLanguageChip(entry.sourceLanguage, 16));
+        }
+        const targetChips = renderLanguageChipsRow(flagLangs, 16);
+        if (routeParts.length && targetChips) {
+          routeParts.push(`<span class="alelo-lang-arrow">→</span>`, targetChips);
+        } else if (targetChips) {
+          routeParts.push(targetChips);
+        }
         return `
           <div class="alelo-history-item${isActive ? " alelo-history-item-active" : ""}" data-id="${escapeHtml(entry.id)}">
             <button type="button" class="alelo-history-restore" data-id="${escapeHtml(entry.id)}">
-              <span class="alelo-history-title">${escapeHtml(`"${snippet}" → ${lang}`)}</span>
+              <span class="alelo-history-title">${routeParts.join("")}<span class="alelo-history-snippet">${escapeHtml(`"${snippet}"`)}</span></span>
               <span class="alelo-history-meta">${escapeHtml(formatRelativeTime(entry.savedAt))} · ${escapeHtml(historySummary(entry))}</span>
             </button>
             <button type="button" class="alelo-history-delete" data-id="${escapeHtml(entry.id)}" aria-label="Remove from history" title="Remove">×</button>
           </div>`;
       })
       .join("");
+
+    hydrateLanguageFlags(historyList);
   }
 
   function restoreHistoryEntry(entry) {
@@ -516,17 +717,19 @@
     activeHistoryId = entry.id;
     lastSourceText = entry.sourceText || "";
     lastPageUrl = entry.pageUrl || "";
+    setSourceLanguageState(entry.sourceLanguage, false);
     const translations = normalizeHistoryTranslations(entry);
     setRequestedLanguages(translations.map((item) => item.targetLanguage).filter(Boolean));
     syncLegacyTranslationFields(translations);
 
-    updateTargetLanguageDisplay(lastRequestedLanguages);
+    updateLanguageRouteDisplay();
     updatePageSourceDisplay(lastPageUrl);
     updateSourceTextDisplay(lastSourceText, false);
     spinner.classList.add("alelo-hidden");
     errorBox.innerHTML = "";
     errorBox.classList.add("alelo-hidden");
     formattedBox.innerHTML = renderTranslationsHtml(translations);
+    hydrateLanguageFlags(formattedBox);
     rawBox.textContent = currentRawJson || "No raw JSON available";
     actionStatus.textContent = "";
 
@@ -661,15 +864,6 @@
     rawBox.classList.toggle("alelo-hidden", showFormatted);
   }
 
-  function normalizeLanguageCode(code) {
-    return String(code || "")
-      .trim()
-      .replace(/_/g, "-")
-      .split("-")
-      .map((part, index) => (index === 0 ? part.toLowerCase() : part.toUpperCase()))
-      .join("-");
-  }
-
   function renderFavoritesList() {
     if (!favoritesList) return;
 
@@ -680,7 +874,7 @@
         const canMoveDown = index < draftFavoriteLanguages.length - 1;
         return `
           <div class="alelo-favorite-item" data-index="${index}">
-            <div class="alelo-favorite-label">${escapeHtml(lang.label)}</div>
+            <div class="alelo-favorite-label">${renderLanguageChip(lang, 20)}</div>
             <div class="alelo-favorite-code">${escapeHtml(lang.code)}</div>
             <div class="alelo-favorite-actions">
               <button type="button" class="alelo-btn alelo-btn-small alelo-fav-up" data-index="${index}" ${canMoveUp ? "" : "disabled"} title="Move up">↑</button>
@@ -690,17 +884,97 @@
           </div>`;
       })
       .join("");
+
+    hydrateLanguageFlags(favoritesList);
   }
 
-  function populatePresetSelect() {
-    if (!favoritesPreset) return;
+  function closePresetPicker() {
+    if (!favoritesPickerMenu || !favoritesPickerTrigger) return;
+    favoritesPickerMenu.classList.add("alelo-hidden");
+    favoritesPickerTrigger.setAttribute("aria-expanded", "false");
+  }
+
+  function togglePresetPicker() {
+    if (!favoritesPickerMenu || !favoritesPickerTrigger || favoritesPickerTrigger.disabled) return;
+    const open = favoritesPickerMenu.classList.contains("alelo-hidden");
+    if (open) {
+      favoritesPickerMenu.classList.remove("alelo-hidden");
+      favoritesPickerTrigger.setAttribute("aria-expanded", "true");
+    } else {
+      closePresetPicker();
+    }
+  }
+
+  function renderPresetPickerTrigger() {
+    if (!favoritesPickerTrigger) return;
+
+    const valueEl = favoritesPickerTrigger.querySelector(".alelo-lang-picker-value");
+    if (!valueEl) return;
+
+    if (!selectedPresetCode) {
+      valueEl.className = "alelo-lang-picker-value alelo-lang-picker-placeholder";
+      valueEl.textContent = "Add a language…";
+      return;
+    }
+
+    const preset = languagePresets.find(
+      (lang) => normalizeLanguageCode(lang.code) === normalizeLanguageCode(selectedPresetCode)
+    );
+    if (!preset) {
+      selectedPresetCode = "";
+      renderPresetPickerTrigger();
+      return;
+    }
+
+    valueEl.className = "alelo-lang-picker-value";
+    valueEl.innerHTML = `${renderLanguageChip(preset, 20)}<span class="alelo-favorite-code">${escapeHtml(preset.code)}</span>`;
+  }
+
+  function clearPresetSelection() {
+    selectedPresetCode = "";
+    renderPresetPickerTrigger();
+    favoritesPickerMenu?.querySelectorAll(".alelo-lang-picker-option.alelo-selected").forEach((el) => {
+      el.classList.remove("alelo-selected");
+    });
+  }
+
+  function populatePresetPicker() {
+    if (!favoritesPickerMenu || !favoritesPickerTrigger) return;
 
     const existing = new Set(draftFavoriteLanguages.map((lang) => normalizeLanguageCode(lang.code)));
     const options = languagePresets.filter((lang) => !existing.has(normalizeLanguageCode(lang.code)));
 
-    favoritesPreset.innerHTML =
-      `<option value="">Add a language…</option>` +
-      options.map((lang) => `<option value="${escapeHtml(lang.code)}">${escapeHtml(lang.label)} (${escapeHtml(lang.code)})</option>`).join("");
+    if (!options.length) {
+      favoritesPickerMenu.innerHTML = `<li class="alelo-lang-picker-empty">All preset languages added</li>`;
+      selectedPresetCode = "";
+      renderPresetPickerTrigger();
+      favoritesPickerTrigger.disabled = true;
+      closePresetPicker();
+      return;
+    }
+
+    favoritesPickerTrigger.disabled = false;
+
+    if (
+      selectedPresetCode &&
+      !options.some((lang) => normalizeLanguageCode(lang.code) === normalizeLanguageCode(selectedPresetCode))
+    ) {
+      selectedPresetCode = "";
+    }
+
+    favoritesPickerMenu.innerHTML = options
+      .map((lang) => {
+        const selected = normalizeLanguageCode(lang.code) === normalizeLanguageCode(selectedPresetCode);
+        return `<li class="alelo-lang-picker-option${selected ? " alelo-selected" : ""}" role="option" data-code="${escapeHtml(lang.code)}" tabindex="-1">
+          ${renderLanguageChip(lang, 20)}
+          <span class="alelo-favorite-code">${escapeHtml(lang.code)}</span>
+        </li>`;
+      })
+      .join("");
+
+    renderPresetPickerTrigger();
+    hydrateLanguageFlags(favoritesPickerMenu);
+    hydrateLanguageFlags(favoritesPickerTrigger);
   }
 
   function addFavoriteLanguage(entry) {
@@ -714,7 +988,7 @@
 
     draftFavoriteLanguages.push({ code, label: label || code });
     renderFavoritesList();
-    populatePresetSelect();
+    populatePresetPicker();
     return true;
   }
 
@@ -725,14 +999,14 @@
     [copy[index], copy[target]] = [copy[target], copy[index]];
     draftFavoriteLanguages = copy;
     renderFavoritesList();
-    populatePresetSelect();
+    populatePresetPicker();
   }
 
   function removeFavoriteLanguage(index) {
     if (draftFavoriteLanguages.length <= 1) return;
     draftFavoriteLanguages = draftFavoriteLanguages.filter((_, i) => i !== index);
     renderFavoritesList();
-    populatePresetSelect();
+    populatePresetPicker();
   }
 
   async function loadCssIntoShadow(shadowRoot) {
@@ -782,7 +1056,9 @@
     configSaveBtn = root.querySelector("#alelo-config-save-btn");
     configStatus = root.querySelector("#alelo-config-status");
     favoritesList = root.querySelector("#alelo-favorites-list");
-    favoritesPreset = root.querySelector("#alelo-favorites-preset");
+    favoritesPicker = root.querySelector("#alelo-favorites-picker");
+    favoritesPickerTrigger = root.querySelector("#alelo-favorites-picker-trigger");
+    favoritesPickerMenu = root.querySelector("#alelo-favorites-picker-menu");
     favoritesAddBtn = root.querySelector("#alelo-favorites-add-btn");
     favoritesCustomCode = root.querySelector("#alelo-favorites-custom-code");
     favoritesCustomLabel = root.querySelector("#alelo-favorites-custom-label");
@@ -807,7 +1083,7 @@
           label: lang.label
         }));
         renderFavoritesList();
-        populatePresetSelect();
+        populatePresetPicker();
       }
     } catch {
       // Settings unavailable — form stays empty
@@ -840,7 +1116,7 @@
           label: lang.label
         }));
         renderFavoritesList();
-        populatePresetSelect();
+        populatePresetPicker();
         configStatus.textContent = "Saved";
       } else {
         configStatus.textContent = response?.error || "Save failed";
@@ -927,13 +1203,32 @@
     });
 
     favoritesAddBtn.addEventListener("click", () => {
-      const code = favoritesPreset.value;
-      if (!code) return;
-      const preset = languagePresets.find((lang) => normalizeLanguageCode(lang.code) === normalizeLanguageCode(code));
+      if (!selectedPresetCode) return;
+      const preset = languagePresets.find(
+        (lang) => normalizeLanguageCode(lang.code) === normalizeLanguageCode(selectedPresetCode)
+      );
       if (preset) {
         addFavoriteLanguage(preset);
-        favoritesPreset.value = "";
+        clearPresetSelection();
+        populatePresetPicker();
       }
+    });
+
+    favoritesPickerTrigger.addEventListener("click", (e) => {
+      e.stopPropagation();
+      togglePresetPicker();
+    });
+
+    favoritesPickerMenu.addEventListener("click", (e) => {
+      const option = e.target.closest(".alelo-lang-picker-option");
+      if (!option?.dataset.code) return;
+      selectedPresetCode = normalizeLanguageCode(option.dataset.code);
+      populatePresetPicker();
+      closePresetPicker();
+    });
+
+    root.addEventListener("click", () => {
+      closePresetPicker();
     });
 
     favoritesAddCustomBtn.addEventListener("click", () => {
@@ -1005,6 +1300,7 @@
     shadowRoot.appendChild(overlay);
 
     cacheModalNodes(overlay);
+    setupFlagHydration(overlay);
     attachModalEvents(overlay);
 
     if (versionEl) {
@@ -1035,7 +1331,7 @@
     currentRawJson = "";
     currentTranslatedText = "";
 
-    updateTargetLanguageDisplay(lastRequestedLanguages);
+    setSourceLanguageState(null, true);
     updatePageSourceDisplay(lastPageUrl);
     updateSourceTextDisplay(lastSourceText, false);
     formattedBox.innerHTML = "";
@@ -1045,7 +1341,7 @@
     actionStatus.textContent = "";
 
     if (payload?.parallel && lastRequestedLanguages.length > 1) {
-      formattedBox.innerHTML = renderPendingTranslationsHtml(lastRequestedLanguages);
+      setFormattedTranslationsHtml(renderPendingTranslationsHtml(lastRequestedLanguages));
       spinner.classList.add("alelo-hidden");
     } else {
       formattedBox.innerHTML = "";
@@ -1099,7 +1395,7 @@
     );
     syncLegacyTranslationFields(translations);
 
-    updateTargetLanguageDisplay(lastRequestedLanguages);
+    setSourceLanguageState(payload?.sourceLanguage, false);
     updatePageSourceDisplay(lastPageUrl);
     updateSourceTextDisplay(lastSourceText, false);
     spinner.classList.add("alelo-hidden");
@@ -1108,7 +1404,7 @@
     closeSidePanels();
 
     if (!payload?.finalizeOnly) {
-      formattedBox.innerHTML = renderTranslationsHtml(translations);
+      setFormattedTranslationsHtml(renderTranslationsHtml(translations));
     }
 
     rawBox.textContent = currentRawJson || "No raw JSON available";
@@ -1119,9 +1415,27 @@
 
     await saveToHistory({
       sourceText: lastSourceText,
+      sourceLanguage: lastSourceLanguage,
       translations,
       pageUrl: lastPageUrl
     });
+  };
+
+  window[CONTENT_GLOBAL.UPDATE_SOURCE_LANGUAGE] = async (payload) => {
+    await ensureModal();
+
+    if (payload?.sourceText) {
+      lastSourceText = payload.sourceText;
+    }
+    if (payload?.pageUrl) {
+      lastPageUrl = payload.pageUrl;
+    }
+    if (Array.isArray(payload?.targetLanguages) && payload.targetLanguages.length) {
+      setRequestedLanguages(payload.targetLanguages);
+    }
+    setSourceLanguageState(payload?.sourceLanguage, false);
+    updatePageSourceDisplay(lastPageUrl);
+    updateSourceTextDisplay(lastSourceText, false);
   };
 
   window[CONTENT_GLOBAL.SHOW_ERROR] = async (payload) => {
@@ -1141,7 +1455,7 @@
     const message = escapeHtml(errorInfo.message || "An unknown error occurred.");
     const hint = errorInfo.hint ? escapeHtml(errorInfo.hint) : "";
 
-    updateTargetLanguageDisplay(lastRequestedLanguages);
+    setSourceLanguageState(payload?.sourceLanguage, false);
     updatePageSourceDisplay(lastPageUrl);
     updateSourceTextDisplay(lastSourceText, false);
     spinner.classList.add("alelo-hidden");

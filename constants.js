@@ -68,6 +68,9 @@ const CONTEXT_MENU_ALL_FAVORITES_TITLE = "All favorites (parallel)";
 const SYSTEM_PROMPT =
   "You are a translation assistant. Translate accurately. Reply with ONLY the translated text, no explanation.";
 
+const SOURCE_LANGUAGE_SYSTEM_PROMPT =
+  'You identify the language of text. Reply with ONLY valid JSON: {"code":"bcp47","label":"English name"}. Use ISO 639-1 or BCP-47 codes (e.g. en, pt-BR). No markdown, no explanation.';
+
 const MESSAGE_ACTION = {
   RETRY_TRANSLATION: "retry-translation",
   GET_CONFIG: "get-config",
@@ -75,7 +78,8 @@ const MESSAGE_ACTION = {
   GET_HISTORY: "get-history",
   SAVE_HISTORY_ENTRY: "save-history-entry",
   CLEAR_HISTORY: "clear-history",
-  REMOVE_HISTORY_ENTRY: "remove-history-entry"
+  REMOVE_HISTORY_ENTRY: "remove-history-entry",
+  GET_FLAG_IMAGE: "get-flag-image"
 };
 
 const CONTENT_GLOBAL = {
@@ -84,7 +88,8 @@ const CONTENT_GLOBAL = {
   SHOW_LOADING: "__aleloShowLoading",
   SHOW_PARTIAL: "__aleloShowPartial",
   SHOW_RESULT: "__aleloShowResult",
-  SHOW_ERROR: "__aleloShowError"
+  SHOW_ERROR: "__aleloShowError",
+  UPDATE_SOURCE_LANGUAGE: "__aleloUpdateSourceLanguage"
 };
 
 const UI_LIMIT = {
