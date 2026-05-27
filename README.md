@@ -4,6 +4,20 @@ A Chromium extension (Manifest V3) that translates selected text in the browser 
 
 **Version:** 0.1.0
 
+## Preview
+
+Translation modal with detected source language, flags, and generation metadata:
+
+![Translation modal — German to English](docs/preview_1.jpg)
+
+Settings — configure Ollama, favorite languages, and the language picker:
+
+![Settings — favorite languages and API configuration](docs/preview_2.jpg)
+
+Parallel translation to multiple favorite languages at once:
+
+![Parallel translation — French to English, Italian, and German](docs/preview_3.jpg)
+
 ## Features
 
 - **Selection context menu** — select text, right-click, and choose **Translate with Alelo** → pick a favorite language.
@@ -145,6 +159,7 @@ Selected text is sent only to the chat endpoint you configure (by default, your 
 | `content.html` / `content.css` | Modal markup and styles |
 | `language-flags.js` | Language code → flag image URL mapping |
 | `icons/` | Extension and toolbar icons |
+| `docs/` | README preview screenshots |
 
 ## Troubleshooting
 
