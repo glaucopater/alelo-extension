@@ -1,106 +1,37 @@
-importScripts("config.js");
+importScripts("constants.js", "config.js");
 
-const SYSTEM_PROMPT = "You are an Glowing Monocle. You receive an image and you need to analyze it in detail. \
-You need to provide a detailed description of what is in the image, including objects, people, animals, and the environment. \
-Reply in markdown format, with sections for description, categories/tags, color palette, and any anomalies or hallucinations. \
-Be concise but thorough. If the image contains NSFW content, clearly indicate that in the response.";
-
-const USER_PROMPT = "Describe what is in this image. Provide a list of categories and tags. \
-Provide a list of palette used in the image in hexadecimal format. \
-Verify if there are any anomalies or hallucinations. Tell me if the image is NSFW.";
-
-function blobToBase64(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.onloadend = () => {
-      const dataUrl = reader.result;
-      if (typeof dataUrl !== "string") {
-        reject(new Error("Failed to convert blob to base64"));
-        return;
-      }
-
-      const parts = dataUrl.split(",");
-      if (parts.length < 2) {
-        reject(new Error("Invalid data URL"));
-        return;
-      }
-
-      resolve(parts[1]);
-    };
-
-    reader.onerror = () => {
-      reject(reader.error || new Error("FileReader error"));
-    };
-
-    reader.readAsDataURL(blob);
-  });
+function languageMenuId(code) {
+  return `${CONTEXT_MENU_LANG_PREFIX}${normalizeLanguageCode(code).replace(/[^a-zA-Z0-9-]/g, "_")}`;
 }
 
-function gcd(a, b) {
-  let x = Math.abs(a);
-  let y = Math.abs(b);
-  while (y) {
-    const temp = y;
-    y = x % y;
-    x = temp;
-  }
-  return x || 1;
+function menuIdToLanguageCode(menuItemId) {
+  if (!menuItemId?.startsWith(CONTEXT_MENU_LANG_PREFIX)) return null;
+  return menuItemId.slice(CONTEXT_MENU_LANG_PREFIX.length).replace(/_/g, "-");
 }
 
-function computeAspectRatio(width, height) {
-  if (!width || !height) return null;
-  const divisor = gcd(width, height);
-  return `${Math.round(width / divisor)}:${Math.round(height / divisor)}`;
+function buildUserPrompt(sourceText, targetLanguage) {
+  const label = targetLanguage?.label || targetLanguage?.code || "target language";
+  const code = targetLanguage?.code || label;
+  return `Translate the following text to ${label} (${code}):\n\n${sourceText}`;
 }
 
-async function getImageMetadata(blob) {
-  const metadata = {
-    width: null,
-    height: null,
-    aspectRatio: null,
-    fileSize: blob.size ?? null,
-    mimeType: blob.type || null
-  };
-
-  try {
-    const bitmap = await createImageBitmap(blob);
-    metadata.width = bitmap.width;
-    metadata.height = bitmap.height;
-    metadata.aspectRatio = computeAspectRatio(bitmap.width, bitmap.height);
-    if (typeof bitmap.close === "function") bitmap.close();
-  } catch (error) {
-    console.warn("Could not read image dimensions:", error);
-  }
-
-  return metadata;
-}
-
-function formatErrorMessage(error) {
+function formatErrorMessage(error, context = {}) {
   const msg = error?.message || String(error);
 
   if (msg === "Failed to fetch" || (error?.name === "TypeError" && /fetch/i.test(msg))) {
     return {
       title: "Cannot reach the API",
-      message: "The analysis server did not respond. Check that it is running and that the API URL in Settings is correct.",
+      message: "The translation server did not respond. Check that it is running and that the API URL in Settings is correct.",
       hint: "For Ollama, start it with OLLAMA_ORIGINS=chrome-extension://* so the extension can connect."
     };
   }
 
-  if (msg.startsWith("Image fetch failed")) {
-    const status = msg.match(/HTTP (\d+)/)?.[1] || "unknown";
-    return {
-      title: "Could not load the image",
-      message: `The image could not be downloaded (HTTP ${status}). Some sites block direct image access.`,
-      hint: "Try opening the image in a new tab, then right-click and analyze it from there."
-    };
-  }
-
   if (msg.startsWith("Ollama error 404")) {
+    const model = context.model ? ` "${context.model}"` : "";
     return {
       title: "Model not found",
-      message: "The API returned 404 — the model name may be wrong or not installed.",
-      hint: "Open Settings and verify the model name matches one available on your server."
+      message: `The model${model} is not installed or the name does not match Ollama exactly.`,
+      hint: "Run `ollama list` in a terminal and copy the NAME column into Settings → Model (e.g. gemma4:e2b)."
     };
   }
 
@@ -115,7 +46,7 @@ function formatErrorMessage(error) {
   if (msg.startsWith("Ollama error 5")) {
     return {
       title: "Server error",
-      message: "The analysis server returned an error. Check the server logs for details.",
+      message: "The translation server returned an error. Check the server logs for details.",
       hint: msg
     };
   }
@@ -129,7 +60,7 @@ function formatErrorMessage(error) {
   }
 
   return {
-    title: "Analysis failed",
+    title: "Translation failed",
     message: msg,
     hint: ""
   };
@@ -138,174 +69,355 @@ function formatErrorMessage(error) {
 async function injectContentScript(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: ["content.js"]
+    files: ["constants.js", "content.js"]
   });
 }
 
-async function showLoading(tabId, imageUrl) {
+async function showLoading(tabId, payload) {
   await injectContentScript(tabId);
   await chrome.scripting.executeScript({
     target: { tabId },
-    func: (url) => {
-      if (window.__imageAnalyzerShowLoading) {
-        window.__imageAnalyzerShowLoading(url);
+    func: (data, hookName) => {
+      if (window[hookName]) {
+        window[hookName](data);
       }
     },
-    args: [imageUrl]
+    args: [payload, CONTENT_GLOBAL.SHOW_LOADING]
   });
 }
 
-async function showResult(tabId, imageUrl, formattedText, rawJsonText, imageMetadata) {
+async function showPartialResult(tabId, payload) {
   await injectContentScript(tabId);
   await chrome.scripting.executeScript({
     target: { tabId },
-    func: (url, formatted, raw, metadata) => {
-      if (window.__imageAnalyzerShowResult) {
-        window.__imageAnalyzerShowResult(url, formatted, raw, metadata);
+    func: (data, hookName) => {
+      if (window[hookName]) {
+        window[hookName](data);
       }
     },
-    args: [imageUrl, formattedText, rawJsonText, imageMetadata]
+    args: [payload, CONTENT_GLOBAL.SHOW_PARTIAL]
   });
 }
 
-async function showError(tabId, imageUrl, errorInfo) {
+async function showResult(tabId, payload) {
   await injectContentScript(tabId);
   await chrome.scripting.executeScript({
     target: { tabId },
-    func: (url, info) => {
-      if (window.__imageAnalyzerShowError) {
-        window.__imageAnalyzerShowError(url, info);
+    func: (data, hookName) => {
+      if (window[hookName]) {
+        window[hookName](data);
       }
     },
-    args: [imageUrl, errorInfo]
+    args: [payload, CONTENT_GLOBAL.SHOW_RESULT]
   });
 }
 
-async function analyzeImage(tabId, imageUrl) {
+async function showError(tabId, payload) {
+  await injectContentScript(tabId);
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (data, hookName) => {
+      if (window[hookName]) {
+        window[hookName](data);
+      }
+    },
+    args: [payload, CONTENT_GLOBAL.SHOW_ERROR]
+  });
+}
+
+async function requestTranslation(config, sourceText, targetLanguage) {
+  const targetLang = normalizeLanguageEntry(targetLanguage);
+  if (!targetLang) {
+    throw new Error("Invalid target language");
+  }
+
+  const payload = {
+    model: config.model,
+    stream: false,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: buildUserPrompt(sourceText, targetLang) }
+    ]
+  };
+
+  const headers = { "Content-Type": "application/json" };
+  if (config.authToken) {
+    headers.Authorization = `Bearer ${config.authToken}`;
+  }
+
+  const response = await fetch(config.apiUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload)
+  });
+
+  const raw = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`Ollama error ${response.status}: ${raw || "No response body"}`);
+  }
+
+  let translatedText = raw;
+  let rawJsonText = raw;
+
   try {
-    await showLoading(tabId, imageUrl);
+    const parsed = JSON.parse(raw);
+    rawJsonText = JSON.stringify(parsed, null, 2);
+    translatedText = parsed?.message?.content ?? raw;
+  } catch {
+    rawJsonText = raw;
+    translatedText = raw;
+  }
 
-    const config = await getStoredConfig();
+  return {
+    targetLanguage: targetLang,
+    translatedText: String(translatedText || "").trim(),
+    rawJsonText
+  };
+}
 
-    const imageResponse = await fetch(imageUrl);
-    if (!imageResponse.ok) {
-      throw new Error(`Image fetch failed: HTTP ${imageResponse.status}`);
-    }
+async function translateLanguages(tabId, sourceText, targetLanguages, pageUrl) {
+  const trimmedSource = String(sourceText || "").trim();
+  const langs = (Array.isArray(targetLanguages) ? targetLanguages : [])
+    .map((lang) => normalizeLanguageEntry(lang))
+    .filter(Boolean);
 
-    const imageBlob = await imageResponse.blob();
-    const [imageBase64, imageMetadata] = await Promise.all([
-      blobToBase64(imageBlob),
-      getImageMetadata(imageBlob)
-    ]);
+  if (!trimmedSource) {
+    await showError(tabId, {
+      sourceText: "",
+      targetLanguages: langs,
+      pageUrl: pageUrl || "",
+      errorInfo: {
+        title: "No text selected",
+        message: "Select some text on the page, then right-click and choose a language.",
+        hint: ""
+      }
+    });
+    return;
+  }
 
-    const payload = {
-      model: config.model,
-      stream: false,
-      messages: [
-        {
-          role: "user",
-          content: SYSTEM_PROMPT + USER_PROMPT,
-          images: [imageBase64]
-        }
-      ]
-    };
+  if (!langs.length) {
+    await showError(tabId, {
+      sourceText: trimmedSource,
+      targetLanguages: [],
+      pageUrl: pageUrl || "",
+      errorInfo: {
+        title: "No target language",
+        message: "Add at least one favorite language in Settings.",
+        hint: ""
+      }
+    });
+    return;
+  }
 
-    const headers = { "Content-Type": "application/json" };
-    if (config.authToken) {
-      headers.Authorization = `Bearer ${config.authToken}`;
-    }
+  let config = null;
 
-    const response = await fetch(config.apiUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload)
+  try {
+    await showLoading(tabId, {
+      sourceText: trimmedSource,
+      targetLanguages: langs,
+      pageUrl: pageUrl || "",
+      parallel: langs.length > 1
     });
 
-    const raw = await response.text();
+    config = await getStoredConfig();
 
-    if (!response.ok) {
-      throw new Error(`Ollama error ${response.status}: ${raw || "No response body"}`);
+    if (langs.length === 1) {
+      try {
+        const result = await requestTranslation(config, trimmedSource, langs[0]);
+        await showResult(tabId, {
+          sourceText: trimmedSource,
+          targetLanguages: langs,
+          pageUrl: pageUrl || "",
+          translations: [{ ok: true, ...result }]
+        });
+      } catch (error) {
+        await showError(tabId, {
+          sourceText: trimmedSource,
+          targetLanguages: langs,
+          pageUrl: pageUrl || "",
+          errorInfo: formatErrorMessage(error, { model: config.model })
+        });
+      }
+      return;
     }
 
-    let formattedText = raw;
-    let rawJsonText = raw;
+    const orderedResults = new Array(langs.length);
 
-    try {
-      const parsed = JSON.parse(raw);
-      rawJsonText = JSON.stringify(parsed, null, 2);
-      formattedText = parsed?.message?.content ?? raw;
-    } catch {
-      rawJsonText = raw;
-      formattedText = raw;
+    await Promise.all(
+      langs.map(async (lang, index) => {
+        let item;
+
+        try {
+          const result = await requestTranslation(config, trimmedSource, lang);
+          item = { ok: true, ...result };
+        } catch (error) {
+          item = {
+            ok: false,
+            targetLanguage: lang,
+            errorInfo: formatErrorMessage(error, { model: config.model })
+          };
+        }
+
+        orderedResults[index] = item;
+
+        await showPartialResult(tabId, {
+          sourceText: trimmedSource,
+          targetLanguages: langs,
+          pageUrl: pageUrl || "",
+          translation: item
+        });
+      })
+    );
+
+    const results = orderedResults.filter(Boolean);
+    const successes = results.filter((item) => item.ok);
+
+    if (!successes.length) {
+      await showError(tabId, {
+        sourceText: trimmedSource,
+        targetLanguages: langs,
+        pageUrl: pageUrl || "",
+        errorInfo: results[0]?.errorInfo || {
+          title: "Translation failed",
+          message: "All translations failed.",
+          hint: ""
+        }
+      });
+      return;
     }
 
-    await showResult(tabId, imageUrl, formattedText, rawJsonText, imageMetadata);
+    await showResult(tabId, {
+      sourceText: trimmedSource,
+      targetLanguages: langs,
+      pageUrl: pageUrl || "",
+      translations: results,
+      finalizeOnly: true
+    });
   } catch (error) {
     try {
-      await showError(tabId, imageUrl, formatErrorMessage(error));
+      await showError(tabId, {
+        sourceText: trimmedSource,
+        targetLanguages: langs,
+        pageUrl: pageUrl || "",
+        errorInfo: formatErrorMessage(error, { model: config?.model })
+      });
     } catch (innerError) {
       console.error("Failed to display error in modal:", innerError);
     }
   }
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+async function rebuildContextMenus() {
+  await new Promise((resolve) => chrome.contextMenus.removeAll(resolve));
+
   chrome.contextMenus.create({
-    id: "glowing-monocle",
-    title: "Glowing Monocle",
-    contexts: ["image"]
+    id: CONTEXT_MENU_PARENT_ID,
+    title: CONTEXT_MENU_TITLE,
+    contexts: ["selection"]
   });
+
+  const config = await getStoredConfig();
+  const favorites = config.favoriteLanguages;
+
+  if (favorites.length > 1) {
+    chrome.contextMenus.create({
+      id: CONTEXT_MENU_ALL_FAVORITES_ID,
+      parentId: CONTEXT_MENU_PARENT_ID,
+      title: CONTEXT_MENU_ALL_FAVORITES_TITLE,
+      contexts: ["selection"]
+    });
+  }
+
+  for (const lang of favorites) {
+    chrome.contextMenus.create({
+      id: languageMenuId(lang.code),
+      parentId: CONTEXT_MENU_PARENT_ID,
+      title: lang.label,
+      contexts: ["selection"]
+    });
+  }
+}
+
+async function initializeExtension() {
+  await getStoredConfig();
+  await rebuildContextMenus();
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  initializeExtension();
 });
 
+initializeExtension();
+
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId !== "glowing-monocle") return;
   if (!tab?.id) return;
 
-  const imageUrl = info.srcUrl;
-  if (!imageUrl) return;
+  const config = await getStoredConfig();
+  const favorites = config.favoriteLanguages;
 
-  await analyzeImage(tab.id, imageUrl);
+  if (info.menuItemId === CONTEXT_MENU_ALL_FAVORITES_ID) {
+    await translateLanguages(tab.id, info.selectionText, favorites, tab.url || "");
+    return;
+  }
+
+  const menuCode = menuIdToLanguageCode(info.menuItemId);
+  if (!menuCode) return;
+
+  const targetLanguage = favorites.find(
+    (lang) => normalizeLanguageCode(lang.code) === normalizeLanguageCode(menuCode)
+  );
+
+  if (!targetLanguage) return;
+
+  await translateLanguages(tab.id, info.selectionText, [targetLanguage], tab.url || "");
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === "retry-analysis") {
+  if (message.action === MESSAGE_ACTION.RETRY_TRANSLATION) {
     const tabId = sender.tab?.id;
-    const imageUrl = message.imageUrl;
-    if (tabId && imageUrl) {
-      analyzeImage(tabId, imageUrl);
+    const { sourceText, targetLanguages, pageUrl } = message;
+    const langs = Array.isArray(targetLanguages) ? targetLanguages : [];
+
+    if (tabId && sourceText && langs.length) {
+      translateLanguages(tabId, sourceText, langs, pageUrl);
       sendResponse({ ok: true });
     } else {
-      sendResponse({ ok: false, error: "Missing tab or image URL" });
+      sendResponse({ ok: false, error: "Missing tab, source text, or target languages" });
     }
     return true;
   }
 
-  if (message.action === "get-config") {
-    getStoredConfig().then((config) => sendResponse({ ok: true, config }));
+  if (message.action === MESSAGE_ACTION.GET_CONFIG) {
+    getStoredConfig().then((config) =>
+      sendResponse({ ok: true, config, languagePresets: LANGUAGES_PRESET })
+    );
     return true;
   }
 
-  if (message.action === "save-config") {
-    saveStoredConfig(message.config).then(() => sendResponse({ ok: true }));
+  if (message.action === MESSAGE_ACTION.SAVE_CONFIG) {
+    saveStoredConfig(message.config)
+      .then((config) => rebuildContextMenus().then(() => sendResponse({ ok: true, config })))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || "Save failed" }));
     return true;
   }
 
-  if (message.action === "get-history") {
+  if (message.action === MESSAGE_ACTION.GET_HISTORY) {
     getStoredHistory().then((history) => sendResponse({ ok: true, history }));
     return true;
   }
 
-  if (message.action === "save-history-entry") {
+  if (message.action === MESSAGE_ACTION.SAVE_HISTORY_ENTRY) {
     addHistoryEntry(message.entry).then((history) => sendResponse({ ok: true, history }));
     return true;
   }
 
-  if (message.action === "clear-history") {
+  if (message.action === MESSAGE_ACTION.CLEAR_HISTORY) {
     clearStoredHistory().then(() => sendResponse({ ok: true, history: [] }));
     return true;
   }
 
-  if (message.action === "remove-history-entry") {
+  if (message.action === MESSAGE_ACTION.REMOVE_HISTORY_ENTRY) {
     getStoredHistory().then((history) => {
       const filtered = history.filter((item) => item.id !== message.id);
       return saveStoredHistory(filtered).then(() => sendResponse({ ok: true, history: filtered }));

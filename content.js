@@ -1,12 +1,9 @@
 (() => {
-  if (window.__imageAnalyzerLoaded) return;
-  window.__imageAnalyzerLoaded = true;
+  if (window[CONTENT_GLOBAL.LOADED]) return;
+  window[CONTENT_GLOBAL.LOADED] = true;
 
   let overlay = null;
   let shadowHost = null;
-  let imageBox = null;
-  let imagePreviewWrap = null;
-  let imagePreview = null;
   let spinner = null;
   let formattedBox = null;
   let rawBox = null;
@@ -14,7 +11,6 @@
   let copyBtn = null;
   let actionStatus = null;
   let runBtn = null;
-  let tabFormatted = null;
   let tabRaw = null;
   let versionEl = null;
   let settingsBtn = null;
@@ -29,17 +25,32 @@
   let configAuthToken = null;
   let configSaveBtn = null;
   let configStatus = null;
+  let favoritesList = null;
+  let favoritesPreset = null;
+  let favoritesAddBtn = null;
+  let favoritesCustomCode = null;
+  let favoritesCustomLabel = null;
+  let favoritesAddCustomBtn = null;
+  let targetLangEl = null;
+  let pageSourceEl = null;
+  let sourceTextEl = null;
+  let sourceExpandBtn = null;
+  let sourceWrap = null;
 
   let currentRawJson = "";
-  let currentImageMetadata = null;
-  let lastImageUrl = "";
+  let currentTranslatedText = "";
+  let lastTranslations = [];
+  let lastSourceText = "";
+  let lastTargetLang = null;
+  let lastRequestedLanguages = [];
+  let lastPageUrl = "";
   let isErrorState = false;
   let isRunning = false;
   let cssLoaded = false;
   let historyEntries = [];
   let activeHistoryId = null;
-
-  const HISTORY_STORAGE_KEY = "glowingMonocleHistory";
+  let languagePresets = [];
+  let draftFavoriteLanguages = [];
 
   function closeModal() {
     if (shadowHost) {
@@ -50,33 +61,30 @@
     cssLoaded = false;
   }
 
-  function updateImagePreview(imageUrl) {
-    if (!imagePreview || !imagePreviewWrap) return;
-
-    if (!imageUrl) {
-      imagePreview.removeAttribute("src");
-      imagePreviewWrap.classList.add("ia-hidden");
-      return;
-    }
-
-    imagePreview.onerror = () => {
-      imagePreviewWrap.classList.add("ia-hidden");
-    };
-    imagePreview.onload = () => {
-      imagePreviewWrap.classList.remove("ia-hidden");
-    };
-    imagePreview.src = imageUrl;
+  function escapeHtml(str) {
+    return String(str)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
   }
 
-  function pageHostname(url) {
-    try {
-      return new URL(url).hostname;
-    } catch {
-      return "";
-    }
+  function inlineFormat(s) {
+    let html = escapeHtml(s);
+    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
+    html = html.replace(/`(.+?)`/g, "<code>$1</code>");
+    return html;
   }
 
-  function truncateUrl(url, max = 72) {
+  function truncateText(text, max = UI_LIMIT.TEXT_TRUNCATE) {
+    const value = String(text || "").replace(/\s+/g, " ").trim();
+    if (value.length <= max) return value;
+    return `${value.slice(0, max - 1)}…`;
+  }
+
+  function truncateUrl(url, max = UI_LIMIT.URL_TRUNCATE) {
     const text = String(url || "");
     if (text.length <= max) return text;
     const start = Math.ceil((max - 1) / 2);
@@ -97,47 +105,316 @@
     return new Date(timestamp).toLocaleDateString();
   }
 
-  function formatFileSize(bytes) {
-    if (bytes == null || Number.isNaN(bytes)) return null;
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  function pageHostname(url) {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return "";
+    }
   }
 
-  function formatImageMetadataSummary(imageMetadata) {
-    if (!imageMetadata) return "";
-    const parts = [];
-    if (imageMetadata.width && imageMetadata.height) {
-      parts.push(`${imageMetadata.width}×${imageMetadata.height}`);
+  function describePageSource(pageUrl) {
+    const url = String(pageUrl || "").trim();
+    if (!url) return { label: "", html: "" };
+
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        const display = truncateUrl(url);
+        return {
+          label: parsed.hostname,
+          html: `Found on <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(display)}</a>`
+        };
+      }
+
+      if (parsed.protocol === "file:") {
+        return { label: "Local file", html: "Found on a local file page" };
+      }
+
+      if (parsed.protocol === "chrome:" || parsed.protocol === "chrome-extension:") {
+        return { label: "Browser page", html: "Found on a browser internal page" };
+      }
+
+      return { label: parsed.protocol.replace(":", ""), html: `Found on ${escapeHtml(parsed.protocol)} page` };
+    } catch {
+      return { label: "", html: "" };
     }
-    if (imageMetadata.aspectRatio) parts.push(imageMetadata.aspectRatio);
-    const fileSize = formatFileSize(imageMetadata.fileSize);
-    if (fileSize) parts.push(fileSize);
-    return parts.join(" · ");
+  }
+
+  function formatDuration(ms) {
+    if (ms == null || Number.isNaN(ms)) return null;
+    if (ms < 1000) return `${Math.round(ms)} ms`;
+    return `${(ms / 1000).toFixed(1)} s`;
+  }
+
+  function extractStatsFromRaw(rawJsonText) {
+    try {
+      const parsed = JSON.parse(rawJsonText);
+      const promptTokens = parsed?.prompt_eval_count;
+      const outputTokens = parsed?.eval_count;
+      const totalNs = parsed?.total_duration;
+      const hasTokens = promptTokens != null || outputTokens != null;
+      const prompt = promptTokens ?? 0;
+      const output = outputTokens ?? 0;
+
+      return {
+        durationMs: totalNs != null ? totalNs / 1e6 : null,
+        promptTokens: promptTokens ?? null,
+        outputTokens: outputTokens ?? null,
+        totalTokens: hasTokens ? prompt + output : null
+      };
+    } catch {
+      return null;
+    }
   }
 
   function historySummary(entry) {
-    const stats = extractStatsFromRaw(entry.rawJsonText || "");
     const parts = [];
-    const host = pageHostname(entry.pageUrl || entry.imageUrl);
+    const langs = entry.translations?.length
+      ? entry.translations.map((item) => item.targetLanguage?.label || item.targetLanguage?.code).filter(Boolean)
+      : [];
+    if (langs.length > 1) {
+      parts.push(`${langs.length} languages`);
+    } else {
+      const lang = entry.targetLanguage?.label || entry.targetLanguage?.code || langs[0];
+      if (lang) parts.push(lang);
+    }
+    const host = pageHostname(entry.pageUrl);
     if (host) parts.push(host);
-    const imageMeta = formatImageMetadataSummary(entry.imageMetadata);
-    if (imageMeta) parts.push(imageMeta);
+    const stats = extractStatsFromRaw(entry.rawJsonText || "");
     const duration = formatDuration(stats?.durationMs);
     if (duration) parts.push(duration);
-    if (stats?.totalTokens != null) parts.push(`${stats.totalTokens.toLocaleString()} tokens`);
-    return parts.join(" · ") || "Saved analysis";
+    return parts.join(" · ") || "Saved translation";
+  }
+
+  function formatLanguageLabels(languages) {
+    const labels = (languages || [])
+      .map((lang) => lang?.label || lang?.code)
+      .filter(Boolean);
+    if (!labels.length) return "";
+    if (labels.length === 1) return labels[0];
+    if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+    return `${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`;
+  }
+
+  function normalizeResultTranslations(payload) {
+    if (Array.isArray(payload?.translations) && payload.translations.length) {
+      return payload.translations;
+    }
+
+    if (payload?.translatedText) {
+      return [
+        {
+          ok: true,
+          targetLanguage: payload.targetLanguage || null,
+          translatedText: payload.translatedText,
+          rawJsonText: payload.rawJsonText || ""
+        }
+      ];
+    }
+
+    return [];
+  }
+
+  function normalizeHistoryTranslations(entry) {
+    if (Array.isArray(entry?.translations) && entry.translations.length) {
+      return entry.translations;
+    }
+
+    if (entry?.translatedText) {
+      return [
+        {
+          ok: true,
+          targetLanguage: entry.targetLanguage || null,
+          translatedText: entry.translatedText,
+          rawJsonText: entry.rawJsonText || ""
+        }
+      ];
+    }
+
+    return [];
+  }
+
+  function languageCardKey(lang) {
+    return normalizeLanguageCode(lang?.code || "");
+  }
+
+  function renderPendingTranslationCard(lang) {
+    const label = lang?.label || lang?.code || "Translation";
+    const code = languageCardKey(lang);
+    return `
+      <div class="alelo-translation-card alelo-translation-card-pending" data-lang-code="${escapeHtml(code)}">
+        <h4 class="alelo-translation-card-title">${escapeHtml(label)}</h4>
+        <div class="alelo-card-spinner"><div class="alelo-spinner"></div></div>
+      </div>`;
+  }
+
+  function renderPendingTranslationsHtml(languages) {
+    return `<div class="alelo-translations">${(languages || [])
+      .map((lang) => renderPendingTranslationCard(lang))
+      .join("")}</div>`;
+  }
+
+  function upsertTranslationResult(translation) {
+    const code = languageCardKey(translation?.targetLanguage);
+    if (!code) return;
+
+    const existingIndex = lastTranslations.findIndex(
+      (item) => languageCardKey(item?.targetLanguage) === code
+    );
+
+    if (existingIndex >= 0) {
+      lastTranslations[existingIndex] = translation;
+    } else {
+      lastTranslations.push(translation);
+    }
+
+    syncLegacyTranslationFields(lastTranslations);
+  }
+
+  function updateTranslationCard(translation) {
+    if (!formattedBox) return;
+
+    const code = languageCardKey(translation?.targetLanguage);
+    const card = formattedBox.querySelector(`[data-lang-code="${code}"]`);
+    if (!card) return;
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = renderTranslationCard(translation).trim();
+    const nextCard = wrapper.firstElementChild;
+    if (nextCard) {
+      card.replaceWith(nextCard);
+    }
+  }
+
+  function renderTranslationCard(item) {
+    const label = item.targetLanguage?.label || item.targetLanguage?.code || "Translation";
+    const code = languageCardKey(item.targetLanguage);
+
+    if (!item.ok) {
+      const errorInfo = item.errorInfo || {};
+      return `
+        <div class="alelo-translation-card alelo-translation-card-error" data-lang-code="${escapeHtml(code)}">
+          <h4 class="alelo-translation-card-title">${escapeHtml(label)}</h4>
+          <p class="alelo-translation-card-error-text">${escapeHtml(errorInfo.message || "Translation failed")}</p>
+        </div>`;
+    }
+
+    const stats = extractStatsFromRaw(item.rawJsonText);
+    const text = String(item.translatedText || "").trim() || "No translation returned";
+    return `
+      <div class="alelo-translation-card" data-lang-code="${escapeHtml(code)}">
+        <h4 class="alelo-translation-card-title">${escapeHtml(label)}</h4>
+        ${renderTranslationMeta(stats)}
+        <div class="alelo-translation-output">${inlineFormat(text)}</div>
+      </div>`;
+  }
+
+  function renderTranslationsHtml(translations) {
+    const items = translations || [];
+    if (!items.length) {
+      return `<div class="alelo-translation"><div class="alelo-translation-output">No translation returned</div></div>`;
+    }
+
+    return `<div class="alelo-translations">${items.map((item) => renderTranslationCard(item)).join("")}</div>`;
+  }
+
+  function buildCopyText(translations) {
+    return (translations || [])
+      .filter((item) => item.ok && item.translatedText)
+      .map((item) => {
+        const label = item.targetLanguage?.label || item.targetLanguage?.code || "Translation";
+        return `${label}:\n${item.translatedText}`;
+      })
+      .join("\n\n");
+  }
+
+  function buildRawJson(translations) {
+    return JSON.stringify(translations || [], null, 2);
+  }
+
+  function syncLegacyTranslationFields(translations) {
+    const successes = (translations || []).filter((item) => item.ok && item.translatedText);
+    lastTranslations = translations || [];
+    currentTranslatedText = buildCopyText(successes);
+    currentRawJson = buildRawJson(translations);
+  }
+
+  function setRequestedLanguages(languages) {
+    lastRequestedLanguages = (languages || []).filter(Boolean);
+    lastTargetLang = lastRequestedLanguages[0] || null;
+  }
+
+  function renderTranslationMeta(stats) {
+    const items = [];
+    const duration = formatDuration(stats?.durationMs);
+    if (duration) {
+      items.push(
+        `<span class="alelo-meta-item"><span class="alelo-meta-label">Generation time</span> ${escapeHtml(duration)}</span>`
+      );
+    }
+    if (stats?.totalTokens != null) {
+      const tokenDetail =
+        stats.promptTokens != null && stats.outputTokens != null
+          ? `${stats.promptTokens.toLocaleString()} prompt · ${stats.outputTokens.toLocaleString()} output`
+          : `${stats.totalTokens.toLocaleString()} total`;
+      items.push(
+        `<span class="alelo-meta-item"><span class="alelo-meta-label">Tokens</span> ${escapeHtml(tokenDetail)}</span>`
+      );
+    }
+    if (!items.length) return "";
+    return `<div class="alelo-translation-meta">${items.join("")}</div>`;
+  }
+
+  function renderTranslationHtml(translatedText, rawJsonText) {
+    const stats = extractStatsFromRaw(rawJsonText);
+    const text = String(translatedText || "").trim() || "No translation returned";
+    return `
+      <div class="alelo-translation">
+        ${renderTranslationMeta(stats)}
+        <div class="alelo-translation-output">${inlineFormat(text)}</div>
+      </div>`;
+  }
+
+  function updateTargetLanguageDisplay(targetLanguages) {
+    if (!targetLangEl) return;
+    const languages = Array.isArray(targetLanguages)
+      ? targetLanguages
+      : targetLanguages
+        ? [targetLanguages]
+        : [];
+    const label = formatLanguageLabels(languages);
+    targetLangEl.textContent = label ? `→ ${label}` : "";
+  }
+
+  function updatePageSourceDisplay(pageUrl) {
+    if (!pageSourceEl) return;
+    const source = describePageSource(pageUrl);
+    pageSourceEl.innerHTML = source.html;
+  }
+
+  function updateSourceTextDisplay(sourceText, expanded = false) {
+    if (!sourceTextEl || !sourceExpandBtn) return;
+
+    const text = String(sourceText || "");
+    sourceTextEl.textContent = text;
+    sourceTextEl.classList.toggle("alelo-source-expanded", expanded);
+
+    const needsExpand = text.length > UI_LIMIT.SOURCE_TEXT_PREVIEW || text.includes("\n");
+    sourceExpandBtn.classList.toggle("alelo-hidden", !needsExpand || expanded);
+    sourceExpandBtn.textContent = expanded ? "Show less" : "Show more";
+    sourceWrap?.classList.toggle("alelo-hidden", !text);
   }
 
   function bindHistoryStorageSync() {
-    if (!chrome.storage?.onChanged || window.__imageAnalyzerHistorySync) return;
-    window.__imageAnalyzerHistorySync = true;
+    if (!chrome.storage?.onChanged || window[CONTENT_GLOBAL.HISTORY_SYNC]) return;
+    window[CONTENT_GLOBAL.HISTORY_SYNC] = true;
 
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "local" || !changes[HISTORY_STORAGE_KEY]) return;
       historyEntries = changes[HISTORY_STORAGE_KEY].newValue || [];
       updateHistoryBadge();
-      if (historyPanel && !historyPanel.classList.contains("ia-hidden")) {
+      if (historyPanel && !historyPanel.classList.contains("alelo-hidden")) {
         renderHistoryList();
       }
     });
@@ -145,7 +422,7 @@
 
   async function fetchHistory() {
     try {
-      const response = await chrome.runtime.sendMessage({ action: "get-history" });
+      const response = await chrome.runtime.sendMessage({ action: MESSAGE_ACTION.GET_HISTORY });
       historyEntries = response?.ok ? response.history || [] : [];
     } catch {
       historyEntries = [];
@@ -155,26 +432,29 @@
     return historyEntries;
   }
 
-  async function saveToHistory(imageUrl, formattedText, rawJsonText, imageMetadata) {
-    if (!imageUrl || !formattedText) return;
+  async function saveToHistory(entry) {
+    const translations = normalizeHistoryTranslations(entry);
+    const successes = translations.filter((item) => item.ok && item.translatedText);
+    if (!entry?.sourceText || !successes.length) return;
 
-    const entry = {
+    const payload = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      imageUrl,
-      pageUrl: window.location.href,
-      formattedText,
-      rawJsonText: rawJsonText || "",
-      imageMetadata: imageMetadata || null
+      sourceText: entry.sourceText,
+      translations: successes,
+      translatedText: buildCopyText(successes),
+      targetLanguage: successes[0]?.targetLanguage || null,
+      pageUrl: entry.pageUrl || "",
+      rawJsonText: buildRawJson(translations)
     };
 
     try {
       const response = await chrome.runtime.sendMessage({
-        action: "save-history-entry",
-        entry
+        action: MESSAGE_ACTION.SAVE_HISTORY_ENTRY,
+        entry: payload
       });
       if (response?.ok) {
         historyEntries = response.history || [];
-        activeHistoryId = entry.id;
+        activeHistoryId = payload.id;
         updateHistoryBadge();
         renderHistoryList();
       }
@@ -191,8 +471,8 @@
   }
 
   function closeSidePanels() {
-    settingsPanel?.classList.add("ia-hidden");
-    historyPanel?.classList.add("ia-hidden");
+    settingsPanel?.classList.add("alelo-hidden");
+    historyPanel?.classList.add("alelo-hidden");
   }
 
   function renderHistoryList() {
@@ -200,21 +480,30 @@
 
     if (!historyEntries.length) {
       historyList.innerHTML = "";
-      historyEmpty.classList.remove("ia-hidden");
+      historyEmpty.classList.remove("alelo-hidden");
       return;
     }
 
-    historyEmpty.classList.add("ia-hidden");
+    historyEmpty.classList.add("alelo-hidden");
     historyList.innerHTML = historyEntries
       .map((entry) => {
         const isActive = entry.id === activeHistoryId;
+        const translations = normalizeHistoryTranslations(entry);
+        const langLabels = translations
+          .map((item) => item.targetLanguage?.label || item.targetLanguage?.code)
+          .filter(Boolean);
+        const lang =
+          langLabels.length > 1
+            ? `${langLabels.length} languages`
+            : langLabels[0] || entry.targetLanguage?.label || entry.targetLanguage?.code || "?";
+        const snippet = truncateText(entry.sourceText, UI_LIMIT.HISTORY_SNIPPET);
         return `
-          <div class="ia-history-item${isActive ? " ia-history-item-active" : ""}" data-id="${escapeHtml(entry.id)}">
-            <button type="button" class="ia-history-restore" data-id="${escapeHtml(entry.id)}">
-              <span class="ia-history-url">${escapeHtml(truncateUrl(entry.imageUrl))}</span>
-              <span class="ia-history-meta">${escapeHtml(formatRelativeTime(entry.savedAt))} · ${escapeHtml(historySummary(entry))}</span>
+          <div class="alelo-history-item${isActive ? " alelo-history-item-active" : ""}" data-id="${escapeHtml(entry.id)}">
+            <button type="button" class="alelo-history-restore" data-id="${escapeHtml(entry.id)}">
+              <span class="alelo-history-title">${escapeHtml(`"${snippet}" → ${lang}`)}</span>
+              <span class="alelo-history-meta">${escapeHtml(formatRelativeTime(entry.savedAt))} · ${escapeHtml(historySummary(entry))}</span>
             </button>
-            <button type="button" class="ia-history-delete" data-id="${escapeHtml(entry.id)}" aria-label="Remove from history" title="Remove">×</button>
+            <button type="button" class="alelo-history-delete" data-id="${escapeHtml(entry.id)}" aria-label="Remove from history" title="Remove">×</button>
           </div>`;
       })
       .join("");
@@ -225,20 +514,19 @@
 
     isErrorState = false;
     activeHistoryId = entry.id;
-    lastImageUrl = entry.imageUrl;
-    currentRawJson = entry.rawJsonText || "";
-    currentImageMetadata = entry.imageMetadata || null;
+    lastSourceText = entry.sourceText || "";
+    lastPageUrl = entry.pageUrl || "";
+    const translations = normalizeHistoryTranslations(entry);
+    setRequestedLanguages(translations.map((item) => item.targetLanguage).filter(Boolean));
+    syncLegacyTranslationFields(translations);
 
-    imageBox.textContent = lastImageUrl;
-    updateImagePreview(lastImageUrl);
-    spinner.classList.add("ia-hidden");
+    updateTargetLanguageDisplay(lastRequestedLanguages);
+    updatePageSourceDisplay(lastPageUrl);
+    updateSourceTextDisplay(lastSourceText, false);
+    spinner.classList.add("alelo-hidden");
     errorBox.innerHTML = "";
-    errorBox.classList.add("ia-hidden");
-    formattedBox.innerHTML = renderReportHtml(
-      entry.formattedText || "No result",
-      currentRawJson,
-      currentImageMetadata
-    );
+    errorBox.classList.add("alelo-hidden");
+    formattedBox.innerHTML = renderTranslationsHtml(translations);
     rawBox.textContent = currentRawJson || "No raw JSON available";
     actionStatus.textContent = "";
 
@@ -251,7 +539,7 @@
   async function removeHistoryEntry(id) {
     try {
       const response = await chrome.runtime.sendMessage({
-        action: "remove-history-entry",
+        action: MESSAGE_ACTION.REMOVE_HISTORY_ENTRY,
         id
       });
       if (response?.ok) {
@@ -266,7 +554,7 @@
 
   async function clearHistory() {
     try {
-      const response = await chrome.runtime.sendMessage({ action: "clear-history" });
+      const response = await chrome.runtime.sendMessage({ action: MESSAGE_ACTION.CLEAR_HISTORY });
       if (response?.ok) {
         historyEntries = [];
         updateHistoryBadge();
@@ -278,29 +566,12 @@
   }
 
   function toggleHistoryPanel() {
-    const isHidden = historyPanel.classList.contains("ia-hidden");
+    const isHidden = historyPanel.classList.contains("alelo-hidden");
     closeSidePanels();
-    historyPanel.classList.toggle("ia-hidden", !isHidden);
+    historyPanel.classList.toggle("alelo-hidden", !isHidden);
     if (isHidden) {
       fetchHistory();
     }
-  }
-
-  function escapeHtml(str) {
-    return String(str)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#39;");
-  }
-
-  function inlineFormat(s) {
-    let html = escapeHtml(s);
-    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-    html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-    html = html.replace(/`(.+?)`/g, "<code>$1</code>");
-    return html;
   }
 
   function copyFallback(text) {
@@ -328,23 +599,22 @@
   function showActionStatus(text, isError = false) {
     if (!actionStatus) return;
     actionStatus.textContent = text;
-    actionStatus.classList.toggle("ia-action-status-error", isError);
+    actionStatus.classList.toggle("alelo-action-status-error", isError);
     if (text) {
       setTimeout(() => {
         if (actionStatus?.textContent === text) {
           actionStatus.textContent = "";
-          actionStatus.classList.remove("ia-action-status-error");
+          actionStatus.classList.remove("alelo-action-status-error");
         }
       }, 1500);
     }
   }
 
-  async function copyRawJson() {
-    const text = currentRawJson || "";
+  async function copyTranslation() {
+    const text = currentTranslatedText || "";
     if (!text) return;
 
     let ok = false;
-
     try {
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
@@ -362,454 +632,107 @@
   function setRunningState(running) {
     isRunning = running;
     if (runBtn) {
-      runBtn.disabled = running || !lastImageUrl;
-      runBtn.classList.toggle("ia-running", running);
-      runBtn.title = running ? "Analysis in progress…" : "Run analysis";
+      runBtn.disabled = running || !lastSourceText || !lastRequestedLanguages.length;
+      runBtn.classList.toggle("alelo-running", running);
+      runBtn.title = running
+        ? "Translation in progress…"
+        : lastRequestedLanguages.length > 1
+          ? "Retry all translations"
+          : "Retry translation";
     }
   }
 
   function activateTab(name) {
     const showFormatted = name === "formatted";
 
-    tabFormatted.classList.toggle("ia-tab-active", showFormatted);
-    tabRaw.classList.toggle("ia-tab-active", !showFormatted);
+    tabRaw.classList.toggle("alelo-tab-active", !showFormatted);
+    tabRaw.title = showFormatted ? "Raw JSON" : "Translation";
+    tabRaw.setAttribute("aria-label", showFormatted ? "Raw JSON view" : "Translation view");
 
     if (isErrorState) {
-      errorBox.classList.toggle("ia-hidden", !showFormatted);
-      rawBox.classList.toggle("ia-hidden", showFormatted);
-      formattedBox.classList.add("ia-hidden");
+      errorBox.classList.toggle("alelo-hidden", !showFormatted);
+      rawBox.classList.toggle("alelo-hidden", showFormatted);
+      formattedBox.classList.add("alelo-hidden");
       return;
     }
 
-    errorBox.classList.add("ia-hidden");
-    formattedBox.classList.toggle("ia-hidden", !showFormatted);
-    rawBox.classList.toggle("ia-hidden", showFormatted);
+    errorBox.classList.add("alelo-hidden");
+    formattedBox.classList.toggle("alelo-hidden", !showFormatted);
+    rawBox.classList.toggle("alelo-hidden", showFormatted);
   }
 
-  function formatDuration(ms) {
-    if (ms == null || Number.isNaN(ms)) return null;
-    if (ms < 1000) return `${Math.round(ms)} ms`;
-    return `${(ms / 1000).toFixed(1)} s`;
+  function normalizeLanguageCode(code) {
+    return String(code || "")
+      .trim()
+      .replace(/_/g, "-")
+      .split("-")
+      .map((part, index) => (index === 0 ? part.toLowerCase() : part.toUpperCase()))
+      .join("-");
   }
 
-  function extractStatsFromRaw(rawJsonText) {
-    try {
-      const parsed = JSON.parse(rawJsonText);
-      const promptTokens = parsed?.prompt_eval_count;
-      const outputTokens = parsed?.eval_count;
-      const totalNs = parsed?.total_duration;
+  function renderFavoritesList() {
+    if (!favoritesList) return;
 
-      const hasTokens = promptTokens != null || outputTokens != null;
-      const prompt = promptTokens ?? 0;
-      const output = outputTokens ?? 0;
-
-      return {
-        durationMs: totalNs != null ? totalNs / 1e6 : null,
-        promptTokens: promptTokens ?? null,
-        outputTokens: outputTokens ?? null,
-        totalTokens: hasTokens ? prompt + output : null
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  function renderReportMeta(stats, imageMetadata) {
-    const items = [];
-
-    if (imageMetadata?.width && imageMetadata?.height) {
-      items.push(
-        `<span class="ia-meta-item"><span class="ia-meta-label">Dimensions</span> ${escapeHtml(`${imageMetadata.width}×${imageMetadata.height}`)}</span>`
-      );
-    }
-
-    if (imageMetadata?.aspectRatio) {
-      items.push(
-        `<span class="ia-meta-item"><span class="ia-meta-label">Aspect ratio</span> ${escapeHtml(imageMetadata.aspectRatio)}</span>`
-      );
-    }
-
-    const fileSize = formatFileSize(imageMetadata?.fileSize);
-    if (fileSize) {
-      items.push(
-        `<span class="ia-meta-item"><span class="ia-meta-label">File size</span> ${escapeHtml(fileSize)}</span>`
-      );
-    }
-
-    if (!stats) {
-      if (!items.length) return "";
-      return `<div class="ia-report-meta">${items.join("")}</div>`;
-    }
-
-    const duration = formatDuration(stats.durationMs);
-    if (duration) {
-      items.push(`<span class="ia-meta-item"><span class="ia-meta-label">Generation time</span> ${escapeHtml(duration)}</span>`);
-    }
-
-    if (stats.totalTokens != null) {
-      const tokenDetail =
-        stats.promptTokens != null && stats.outputTokens != null
-          ? `${stats.promptTokens.toLocaleString()} prompt · ${stats.outputTokens.toLocaleString()} output`
-          : `${stats.totalTokens.toLocaleString()} total`;
-      items.push(`<span class="ia-meta-item"><span class="ia-meta-label">Tokens</span> ${escapeHtml(tokenDetail)}</span>`);
-    }
-
-    if (!items.length) return "";
-
-    return `<div class="ia-report-meta">${items.join("")}</div>`;
-  }
-
-  function parseSectionHeading(trimmed) {
-    if (trimmed.startsWith("### ")) {
-      return trimmed.slice(4).trim();
-    }
-
-    if (trimmed.startsWith("## ")) {
-      const heading = trimmed.slice(3).trim();
-      if (/^glowing monocle\b/i.test(heading)) return null;
-      return heading;
-    }
-
-    if (trimmed.startsWith("# ")) {
-      const heading = trimmed.slice(2).trim();
-      if (/^glowing monocle\b/i.test(heading)) return null;
-      return heading;
-    }
-
-    return null;
-  }
-
-  function parseReportSections(markdown) {
-    const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
-    const sections = [];
-    let current = null;
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-
-      if (!trimmed || /^(\*{3,}|-{3,}|_{3,})$/.test(trimmed)) {
-        continue;
-      }
-
-      const heading = parseSectionHeading(trimmed);
-      if (heading) {
-        if (current) sections.push(current);
-        current = { heading, lines: [] };
-        continue;
-      }
-
-      if (current) {
-        current.lines.push(line);
-      }
-    }
-
-    if (current) sections.push(current);
-    return { sections };
-  }
-
-  function sectionKind(heading) {
-    const h = heading.toLowerCase();
-    if (h.includes("categor") || h.includes("tag")) return "tags";
-    if (h.includes("color") || h.includes("palette")) return "palette";
-    if (h.includes("nsfw")) return "nsfw";
-    if (h.includes("anomal") || h.includes("hallucin")) return "anomalies";
-    if (h.includes("description")) return "description";
-    return "default";
-  }
-
-  function parseBulletItems(lines) {
-    return lines
-      .map((line) => line.trim())
-      .filter((line) => /^[-*]\s+/.test(line))
-      .map((line) => line.replace(/^[-*]\s+/, "").replace(/`/g, "").trim())
-      .filter(Boolean);
-  }
-
-  function parsePaletteBullets(lines) {
-    const rows = [];
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!/^[-*]\s+/.test(trimmed)) continue;
-
-      let content = trimmed.replace(/^[-*]\s+/, "").replace(/`/g, "");
-      const hexMatches = content.match(/#[0-9A-Fa-f]{3,8}/g) || [];
-      const hex = hexMatches[0]?.toUpperCase() || null;
-
-      let name = content;
-      const boldMatch = content.match(/^\*\*(.+?)\*\*:?\s*/);
-      if (boldMatch) {
-        name = boldMatch[1];
-      } else {
-        const colonIdx = content.indexOf(":");
-        if (colonIdx > 0) name = content.slice(0, colonIdx);
-      }
-
-      name = name.replace(/\*\*/g, "").trim();
-      const note = content
-        .replace(/^\*\*.+?\*\*:?\s*/, "")
-        .replace(/#[0-9A-Fa-f]{3,8}/g, "")
-        .replace(/\(\s*\)/g, "")
-        .trim();
-
-      rows.push({ name, hex, note: note || null });
-    }
-
-    return rows;
-  }
-
-  function parsePaletteRows(lines) {
-    const rows = [];
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("|") || trimmed.includes(":---")) continue;
-
-      const cells = trimmed
-        .split("|")
-        .map((cell) => cell.trim().replace(/`/g, ""))
-        .filter(Boolean);
-
-      if (cells.length >= 2 && !/^color$/i.test(cells[0])) {
-        const hexMatch = cells[1].match(/#[0-9A-Fa-f]{3,8}/);
-        rows.push({
-          name: cells[0],
-          hex: hexMatch ? hexMatch[0].toUpperCase() : cells[1],
-          note: null
-        });
-      }
-    }
-
-    if (rows.length) return rows;
-    return parsePaletteBullets(lines);
-  }
-
-  function renderPaletteRow(row) {
-    const swatchClass = row.hex ? "ia-swatch" : "ia-swatch ia-swatch-neutral";
-    const swatch = row.hex
-      ? `<span class="${swatchClass}" style="background:${escapeHtml(row.hex)}"></span>`
-      : `<span class="${swatchClass}"></span>`;
-
-    const hexCell = row.hex
-      ? `<code class="ia-swatch-hex">${escapeHtml(row.hex)}</code>`
-      : row.note
-        ? `<span class="ia-swatch-note">${inlineFormat(row.note)}</span>`
-        : "";
-
-    return `
-      <div class="ia-swatch-row">
-        ${swatch}
-        <span class="ia-swatch-name">${inlineFormat(row.name)}</span>
-        ${hexCell}
-      </div>`;
-  }
-
-  function renderProse(lines) {
-    const paragraphs = [];
-    let buffer = [];
-
-    function flush() {
-      const text = buffer.join(" ").trim();
-      if (text) paragraphs.push(`<p>${inlineFormat(text)}</p>`);
-      buffer = [];
-    }
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        flush();
-        continue;
-      }
-      if (/^[-*|]/.test(trimmed)) continue;
-      buffer.push(trimmed);
-    }
-
-    flush();
-    return paragraphs.join("") || "<p>No content</p>";
-  }
-
-  function renderTagsSection(section) {
-    const tags = parseBulletItems(section.lines);
-    const chips = tags
-      .map((tag) => `<span class="ia-tag">${inlineFormat(tag)}</span>`)
+    favoritesList.innerHTML = draftFavoriteLanguages
+      .map((lang, index) => {
+        const canRemove = draftFavoriteLanguages.length > 1;
+        const canMoveUp = index > 0;
+        const canMoveDown = index < draftFavoriteLanguages.length - 1;
+        return `
+          <div class="alelo-favorite-item" data-index="${index}">
+            <div class="alelo-favorite-label">${escapeHtml(lang.label)}</div>
+            <div class="alelo-favorite-code">${escapeHtml(lang.code)}</div>
+            <div class="alelo-favorite-actions">
+              <button type="button" class="alelo-btn alelo-btn-small alelo-fav-up" data-index="${index}" ${canMoveUp ? "" : "disabled"} title="Move up">↑</button>
+              <button type="button" class="alelo-btn alelo-btn-small alelo-fav-down" data-index="${index}" ${canMoveDown ? "" : "disabled"} title="Move down">↓</button>
+              <button type="button" class="alelo-btn alelo-btn-small alelo-fav-remove" data-index="${index}" ${canRemove ? "" : "disabled"} title="Remove">×</button>
+            </div>
+          </div>`;
+      })
       .join("");
-    return chips || "<p>No tags</p>";
   }
 
-  function renderPaletteSection(section) {
-    const rows = parsePaletteRows(section.lines);
-    if (!rows.length) {
-      const items = parseBulletItems(section.lines);
-      if (items.length) {
-        return items.map((item) => `<p class="ia-palette-item">${inlineFormat(item)}</p>`).join("");
-      }
-      return renderProse(section.lines);
-    }
+  function populatePresetSelect() {
+    if (!favoritesPreset) return;
 
-    return rows.map((row) => renderPaletteRow(row)).join("");
+    const existing = new Set(draftFavoriteLanguages.map((lang) => normalizeLanguageCode(lang.code)));
+    const options = languagePresets.filter((lang) => !existing.has(normalizeLanguageCode(lang.code)));
+
+    favoritesPreset.innerHTML =
+      `<option value="">Add a language…</option>` +
+      options.map((lang) => `<option value="${escapeHtml(lang.code)}">${escapeHtml(lang.label)} (${escapeHtml(lang.code)})</option>`).join("");
   }
 
-  function detectNsfwStatus(text) {
-    const plain = text.replace(/\*\*/g, "").trim();
-    const lower = plain.toLowerCase();
+  function addFavoriteLanguage(entry) {
+    const code = normalizeLanguageCode(entry?.code);
+    const label = String(entry?.label || code).trim();
+    if (!code) return false;
 
-    if (
-      /\bdoes not contain\b/.test(lower) ||
-      /\bno nsfw\b/.test(lower) ||
-      /\bnot safe for work\b/.test(lower) && /\bno\b|\bdoes not\b|\bnot contain\b/.test(lower) ||
-      /\bno\b.*\bnsfw\b/.test(lower) ||
-      /\bnsfw\b.*\bno\b/.test(lower)
-    ) {
+    if (draftFavoriteLanguages.some((lang) => normalizeLanguageCode(lang.code) === code)) {
       return false;
     }
 
-    const firstWord = plain.split(/[\s,]/)[0].toLowerCase();
-    if (firstWord === "yes") return true;
-    if (firstWord === "no" || /^no[.\s,]/i.test(plain)) return false;
-
-    if (/\bnsfw\b/.test(lower) && /\b(contain|contains|detected|suggestive|explicit)\b/.test(lower)) {
-      return !/\b(no|not|without)\b/.test(lower);
-    }
-
-    return false;
+    draftFavoriteLanguages.push({ code, label: label || code });
+    renderFavoritesList();
+    populatePresetSelect();
+    return true;
   }
 
-  function renderNsfwSection(section) {
-    const text = section.lines.join("\n").trim();
-    const isNsfw = detectNsfwStatus(text);
-    const label = isNsfw ? "Yes — NSFW content detected" : "No — safe content";
-    const cls = isNsfw ? "ia-nsfw-yes" : "ia-nsfw-no";
-    const detail = renderProse(section.lines);
-
-    return `
-      <div class="ia-report-card ia-card-nsfw">
-        <h3 class="ia-card-title">${inlineFormat(section.heading)}</h3>
-        <span class="ia-nsfw-badge ${cls}">${escapeHtml(label)}</span>
-        ${detail !== "<p>No content</p>" ? `<div class="ia-nsfw-detail">${detail}</div>` : ""}
-      </div>`;
+  function moveFavoriteLanguage(index, direction) {
+    const target = index + direction;
+    if (target < 0 || target >= draftFavoriteLanguages.length) return;
+    const copy = [...draftFavoriteLanguages];
+    [copy[index], copy[target]] = [copy[target], copy[index]];
+    draftFavoriteLanguages = copy;
+    renderFavoritesList();
+    populatePresetSelect();
   }
 
-  function renderSectionCard(section) {
-    const kind = sectionKind(section.heading);
-    const title = `<h3 class="ia-card-title">${inlineFormat(section.heading)}</h3>`;
-
-    if (kind === "nsfw") {
-      return renderNsfwSection(section);
-    }
-
-    let body = "";
-    let cardClass = "ia-report-card";
-
-    if (kind === "tags") {
-      body = `<div class="ia-tag-list">${renderTagsSection(section)}</div>`;
-      cardClass += " ia-card-tags";
-    } else if (kind === "palette") {
-      body = `<div class="ia-palette">${renderPaletteSection(section)}</div>`;
-      cardClass += " ia-card-palette";
-    } else {
-      body = renderProse(section.lines);
-      if (kind === "description" || kind === "anomalies") {
-        cardClass += " ia-card-wide";
-      }
-    }
-
-    return `<div class="${cardClass}">${title}${body}</div>`;
-  }
-
-  function renderReportHtml(markdown, rawJsonText, imageMetadata) {
-    const { sections } = parseReportSections(markdown);
-    const stats = extractStatsFromRaw(rawJsonText);
-
-    if (!sections.length) {
-      const meta = renderReportMeta(stats, imageMetadata);
-      return `<div class="ia-report ia-report-fallback">${meta}${simpleMarkdownToHtml(markdown)}</div>`;
-    }
-
-    const cards = sections.map((section) => renderSectionCard(section)).join("");
-
-    return `
-      <div class="ia-report">
-        ${renderReportMeta(stats, imageMetadata)}
-        <div class="ia-report-grid">${cards}</div>
-      </div>
-    `;
-  }
-
-  function simpleMarkdownToHtml(text) {
-    const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
-    const out = [];
-    let inOl = false;
-    let inUl = false;
-
-    function closeLists() {
-      if (inOl) {
-        out.push("</ol>");
-        inOl = false;
-      }
-      if (inUl) {
-        out.push("</ul>");
-        inUl = false;
-      }
-    }
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-
-      if (!trimmed) {
-        closeLists();
-        continue;
-      }
-
-      if (trimmed.startsWith("### ")) {
-        closeLists();
-        out.push(`<h3>${inlineFormat(trimmed.slice(4))}</h3>`);
-        continue;
-      }
-
-      if (trimmed.startsWith("## ")) {
-        closeLists();
-        out.push(`<h2>${inlineFormat(trimmed.slice(3))}</h2>`);
-        continue;
-      }
-
-      if (trimmed.startsWith("# ")) {
-        closeLists();
-        out.push(`<h1>${inlineFormat(trimmed.slice(2))}</h1>`);
-        continue;
-      }
-
-      if (/^\d+\.\s+/.test(trimmed)) {
-        if (inUl) {
-          out.push("</ul>");
-          inUl = false;
-        }
-        if (!inOl) {
-          out.push("<ol>");
-          inOl = true;
-        }
-        out.push(`<li>${inlineFormat(trimmed.replace(/^\d+\.\s+/, ""))}</li>`);
-        continue;
-      }
-
-      if (/^-\s+/.test(trimmed) || /^\*\s+/.test(trimmed)) {
-        if (inOl) {
-          out.push("</ol>");
-          inOl = false;
-        }
-        if (!inUl) {
-          out.push("<ul>");
-          inUl = true;
-        }
-        out.push(`<li>${inlineFormat(trimmed.replace(/^[-*]\s+/, ""))}</li>`);
-        continue;
-      }
-
-      closeLists();
-      out.push(`<p>${inlineFormat(trimmed)}</p>`);
-    }
-
-    closeLists();
-    return out.join("");
+  function removeFavoriteLanguage(index) {
+    if (draftFavoriteLanguages.length <= 1) return;
+    draftFavoriteLanguages = draftFavoriteLanguages.filter((_, i) => i !== index);
+    renderFavoritesList();
+    populatePresetSelect();
   }
 
   async function loadCssIntoShadow(shadowRoot) {
@@ -837,40 +760,54 @@
   }
 
   function cacheModalNodes(root) {
-    imageBox = root.querySelector("#image-analyzer-image-url");
-    imagePreviewWrap = root.querySelector("#ia-image-preview-wrap");
-    imagePreview = root.querySelector("#ia-image-preview");
-    spinner = root.querySelector("#image-analyzer-spinner");
-    formattedBox = root.querySelector("#image-analyzer-formatted");
-    rawBox = root.querySelector("#image-analyzer-raw");
-    errorBox = root.querySelector("#image-analyzer-error");
-    copyBtn = root.querySelector("#ia-copy-btn");
-    actionStatus = root.querySelector("#ia-action-status");
-    runBtn = root.querySelector("#ia-run-btn");
-    tabFormatted = root.querySelector("#ia-tab-formatted");
-    tabRaw = root.querySelector("#ia-tab-raw");
-    versionEl = root.querySelector("#ia-extension-version");
-    settingsBtn = root.querySelector("#ia-settings-btn");
-    settingsPanel = root.querySelector("#ia-settings-panel");
-    historyBtn = root.querySelector("#ia-history-btn");
-    historyPanel = root.querySelector("#ia-history-panel");
-    historyList = root.querySelector("#ia-history-list");
-    historyEmpty = root.querySelector("#ia-history-empty");
-    historyClearBtn = root.querySelector("#ia-history-clear-btn");
-    configApiUrl = root.querySelector("#ia-config-api-url");
-    configModel = root.querySelector("#ia-config-model");
-    configAuthToken = root.querySelector("#ia-config-auth-token");
-    configSaveBtn = root.querySelector("#ia-config-save-btn");
-    configStatus = root.querySelector("#ia-config-status");
+    spinner = root.querySelector("#alelo-spinner");
+    formattedBox = root.querySelector("#alelo-formatted");
+    rawBox = root.querySelector("#alelo-raw");
+    errorBox = root.querySelector("#alelo-error");
+    copyBtn = root.querySelector("#alelo-copy-btn");
+    actionStatus = root.querySelector("#alelo-action-status");
+    runBtn = root.querySelector("#alelo-run-btn");
+    tabRaw = root.querySelector("#alelo-tab-raw");
+    versionEl = root.querySelector("#alelo-extension-version");
+    settingsBtn = root.querySelector("#alelo-settings-btn");
+    settingsPanel = root.querySelector("#alelo-settings-panel");
+    historyBtn = root.querySelector("#alelo-history-btn");
+    historyPanel = root.querySelector("#alelo-history-panel");
+    historyList = root.querySelector("#alelo-history-list");
+    historyEmpty = root.querySelector("#alelo-history-empty");
+    historyClearBtn = root.querySelector("#alelo-history-clear-btn");
+    configApiUrl = root.querySelector("#alelo-config-api-url");
+    configModel = root.querySelector("#alelo-config-model");
+    configAuthToken = root.querySelector("#alelo-config-auth-token");
+    configSaveBtn = root.querySelector("#alelo-config-save-btn");
+    configStatus = root.querySelector("#alelo-config-status");
+    favoritesList = root.querySelector("#alelo-favorites-list");
+    favoritesPreset = root.querySelector("#alelo-favorites-preset");
+    favoritesAddBtn = root.querySelector("#alelo-favorites-add-btn");
+    favoritesCustomCode = root.querySelector("#alelo-favorites-custom-code");
+    favoritesCustomLabel = root.querySelector("#alelo-favorites-custom-label");
+    favoritesAddCustomBtn = root.querySelector("#alelo-favorites-add-custom-btn");
+    targetLangEl = root.querySelector("#alelo-target-lang");
+    pageSourceEl = root.querySelector("#alelo-page-source");
+    sourceTextEl = root.querySelector("#alelo-source-text");
+    sourceExpandBtn = root.querySelector("#alelo-source-expand-btn");
+    sourceWrap = root.querySelector("#alelo-source-wrap");
   }
 
   async function loadConfigIntoForm() {
     try {
-      const response = await chrome.runtime.sendMessage({ action: "get-config" });
+      const response = await chrome.runtime.sendMessage({ action: MESSAGE_ACTION.GET_CONFIG });
       if (response?.ok && response.config) {
         configApiUrl.value = response.config.apiUrl || "";
         configModel.value = response.config.model || "";
         configAuthToken.value = response.config.authToken || "";
+        languagePresets = response.languagePresets || [];
+        draftFavoriteLanguages = (response.config.favoriteLanguages || []).map((lang) => ({
+          code: lang.code,
+          label: lang.label
+        }));
+        renderFavoritesList();
+        populatePresetSelect();
       }
     } catch {
       // Settings unavailable — form stays empty
@@ -881,7 +818,8 @@
     const config = {
       apiUrl: configApiUrl.value.trim(),
       model: configModel.value.trim(),
-      authToken: configAuthToken.value.trim()
+      authToken: configAuthToken.value.trim(),
+      favoriteLanguages: draftFavoriteLanguages
     };
 
     if (!config.apiUrl || !config.model) {
@@ -889,9 +827,24 @@
       return;
     }
 
+    if (!config.favoriteLanguages.length) {
+      configStatus.textContent = "At least one favorite language is required";
+      return;
+    }
+
     try {
-      await chrome.runtime.sendMessage({ action: "save-config", config });
-      configStatus.textContent = "Saved";
+      const response = await chrome.runtime.sendMessage({ action: MESSAGE_ACTION.SAVE_CONFIG, config });
+      if (response?.ok) {
+        draftFavoriteLanguages = (response.config?.favoriteLanguages || draftFavoriteLanguages).map((lang) => ({
+          code: lang.code,
+          label: lang.label
+        }));
+        renderFavoritesList();
+        populatePresetSelect();
+        configStatus.textContent = "Saved";
+      } else {
+        configStatus.textContent = response?.error || "Save failed";
+      }
       setTimeout(() => {
         if (configStatus) configStatus.textContent = "";
       }, 1500);
@@ -901,48 +854,55 @@
   }
 
   function toggleSettingsPanel() {
-    const isHidden = settingsPanel.classList.contains("ia-hidden");
+    const isHidden = settingsPanel.classList.contains("alelo-hidden");
     closeSidePanels();
-    settingsPanel.classList.toggle("ia-hidden", !isHidden);
+    settingsPanel.classList.toggle("alelo-hidden", !isHidden);
     if (isHidden) {
       loadConfigIntoForm();
     }
   }
 
-  async function runAnalysis() {
-    if (isRunning || !lastImageUrl) return;
+  async function runTranslation() {
+    if (isRunning || !lastSourceText || !lastRequestedLanguages.length) return;
 
     setRunningState(true);
-    spinner.classList.remove("ia-hidden");
+    spinner.classList.remove("alelo-hidden");
     formattedBox.innerHTML = "";
     rawBox.textContent = "";
     errorBox.innerHTML = "";
-    errorBox.classList.add("ia-hidden");
+    errorBox.classList.add("alelo-hidden");
     isErrorState = false;
     activateTab("formatted");
 
     try {
       const response = await chrome.runtime.sendMessage({
-        action: "retry-analysis",
-        imageUrl: lastImageUrl
+        action: MESSAGE_ACTION.RETRY_TRANSLATION,
+        sourceText: lastSourceText,
+        targetLanguages: lastRequestedLanguages,
+        pageUrl: lastPageUrl
       });
 
       if (!response?.ok) {
-        throw new Error(response?.error || "Could not start analysis");
+        throw new Error(response?.error || "Could not start translation");
       }
     } catch (error) {
       setRunningState(false);
-      spinner.classList.add("ia-hidden");
-      await window.__imageAnalyzerShowError(lastImageUrl, {
-        title: "Could not run analysis",
-        message: error?.message || "Failed to communicate with the extension background.",
-        hint: "Try reloading the page and running the analysis again."
+      spinner.classList.add("alelo-hidden");
+      await window[CONTENT_GLOBAL.SHOW_ERROR]({
+        sourceText: lastSourceText,
+        targetLanguages: lastRequestedLanguages,
+        pageUrl: lastPageUrl,
+        errorInfo: {
+          title: "Could not run translation",
+          message: error?.message || "Failed to communicate with the extension background.",
+          hint: "Try reloading the page and translating again."
+        }
       });
     }
   }
 
   function attachModalEvents(root) {
-    root.querySelector("#image-analyzer-close").addEventListener("click", closeModal);
+    root.querySelector("#alelo-close").addEventListener("click", closeModal);
 
     root.addEventListener("click", (e) => {
       if (e.target === root) {
@@ -950,23 +910,67 @@
       }
     });
 
-    tabFormatted.addEventListener("click", () => activateTab("formatted"));
-    tabRaw.addEventListener("click", () => activateTab("raw"));
-    copyBtn.addEventListener("click", copyRawJson);
-    runBtn.addEventListener("click", runAnalysis);
+    tabRaw.addEventListener("click", () => {
+      const showRaw = tabRaw.classList.contains("alelo-tab-active");
+      activateTab(showRaw ? "formatted" : "raw");
+    });
+    copyBtn.addEventListener("click", copyTranslation);
+    runBtn.addEventListener("click", runTranslation);
     historyBtn.addEventListener("click", toggleHistoryPanel);
     historyClearBtn.addEventListener("click", clearHistory);
     settingsBtn.addEventListener("click", toggleSettingsPanel);
     configSaveBtn.addEventListener("click", saveConfig);
 
+    sourceExpandBtn.addEventListener("click", () => {
+      const expanded = sourceTextEl.classList.contains("alelo-source-expanded");
+      updateSourceTextDisplay(lastSourceText, !expanded);
+    });
+
+    favoritesAddBtn.addEventListener("click", () => {
+      const code = favoritesPreset.value;
+      if (!code) return;
+      const preset = languagePresets.find((lang) => normalizeLanguageCode(lang.code) === normalizeLanguageCode(code));
+      if (preset) {
+        addFavoriteLanguage(preset);
+        favoritesPreset.value = "";
+      }
+    });
+
+    favoritesAddCustomBtn.addEventListener("click", () => {
+      const code = favoritesCustomCode.value.trim();
+      const label = favoritesCustomLabel.value.trim();
+      if (!addFavoriteLanguage({ code, label: label || code })) return;
+      favoritesCustomCode.value = "";
+      favoritesCustomLabel.value = "";
+    });
+
+    favoritesList.addEventListener("click", (e) => {
+      const upBtn = e.target.closest(".alelo-fav-up");
+      if (upBtn?.dataset.index != null) {
+        moveFavoriteLanguage(Number(upBtn.dataset.index), -1);
+        return;
+      }
+
+      const downBtn = e.target.closest(".alelo-fav-down");
+      if (downBtn?.dataset.index != null) {
+        moveFavoriteLanguage(Number(downBtn.dataset.index), 1);
+        return;
+      }
+
+      const removeBtn = e.target.closest(".alelo-fav-remove");
+      if (removeBtn?.dataset.index != null) {
+        removeFavoriteLanguage(Number(removeBtn.dataset.index));
+      }
+    });
+
     historyList.addEventListener("click", (e) => {
-      const deleteBtn = e.target.closest(".ia-history-delete");
+      const deleteBtn = e.target.closest(".alelo-history-delete");
       if (deleteBtn?.dataset.id) {
         removeHistoryEntry(deleteBtn.dataset.id);
         return;
       }
 
-      const restoreBtn = e.target.closest(".ia-history-restore");
+      const restoreBtn = e.target.closest(".alelo-history-restore");
       if (restoreBtn?.dataset.id) {
         const entry = historyEntries.find((item) => item.id === restoreBtn.dataset.id);
         restoreHistoryEntry(entry);
@@ -983,7 +987,7 @@
     }
 
     shadowHost = document.createElement("div");
-    shadowHost.id = "image-analyzer-shadow-host";
+    shadowHost.id = "alelo-shadow-host";
     const shadowRoot = shadowHost.attachShadow({ mode: "open" });
     document.documentElement.appendChild(shadowHost);
 
@@ -1015,82 +1019,141 @@
     await fetchHistory();
   }
 
-  function resetToLoadingState(imageUrl) {
+  function resetToLoadingState(payload) {
     isErrorState = false;
     activeHistoryId = null;
-    lastImageUrl = imageUrl || "";
+    lastSourceText = payload?.sourceText || "";
+    setRequestedLanguages(
+      Array.isArray(payload?.targetLanguages)
+        ? payload.targetLanguages
+        : payload?.targetLanguage
+          ? [payload.targetLanguage]
+          : []
+    );
+    lastPageUrl = payload?.pageUrl || "";
+    lastTranslations = [];
     currentRawJson = "";
-    currentImageMetadata = null;
+    currentTranslatedText = "";
 
-    imageBox.textContent = lastImageUrl;
-    updateImagePreview(lastImageUrl);
+    updateTargetLanguageDisplay(lastRequestedLanguages);
+    updatePageSourceDisplay(lastPageUrl);
+    updateSourceTextDisplay(lastSourceText, false);
     formattedBox.innerHTML = "";
     rawBox.textContent = "";
     errorBox.innerHTML = "";
-    errorBox.classList.add("ia-hidden");
+    errorBox.classList.add("alelo-hidden");
     actionStatus.textContent = "";
-    spinner.classList.remove("ia-hidden");
+
+    if (payload?.parallel && lastRequestedLanguages.length > 1) {
+      formattedBox.innerHTML = renderPendingTranslationsHtml(lastRequestedLanguages);
+      spinner.classList.add("alelo-hidden");
+    } else {
+      formattedBox.innerHTML = "";
+      spinner.classList.remove("alelo-hidden");
+    }
 
     setRunningState(true);
     closeSidePanels();
     activateTab("formatted");
   }
 
-  window.__imageAnalyzerShowLoading = async (imageUrl) => {
+  window[CONTENT_GLOBAL.SHOW_LOADING] = async (payload) => {
     await ensureModal();
-    resetToLoadingState(imageUrl);
+    resetToLoadingState(payload);
   };
 
-  window.__imageAnalyzerShowResult = async (imageUrl, formattedText, rawJsonText, imageMetadata) => {
+  window[CONTENT_GLOBAL.SHOW_PARTIAL] = async (payload) => {
     await ensureModal();
 
     isErrorState = false;
-    lastImageUrl = imageUrl || lastImageUrl;
-    currentRawJson = typeof rawJsonText === "string" ? rawJsonText : "";
-    currentImageMetadata = imageMetadata || null;
+    lastSourceText = payload?.sourceText || lastSourceText;
+    lastPageUrl = payload?.pageUrl || lastPageUrl;
 
-    imageBox.textContent = lastImageUrl;
-    updateImagePreview(lastImageUrl);
-    spinner.classList.add("ia-hidden");
-    errorBox.innerHTML = "";
-    errorBox.classList.add("ia-hidden");
-    closeSidePanels();
-    formattedBox.innerHTML = renderReportHtml(
-      formattedText || "No result",
-      currentRawJson,
-      currentImageMetadata
+    if (Array.isArray(payload?.targetLanguages) && payload.targetLanguages.length) {
+      setRequestedLanguages(payload.targetLanguages);
+    }
+
+    if (payload?.translation) {
+      spinner.classList.add("alelo-hidden");
+      errorBox.classList.add("alelo-hidden");
+      closeSidePanels();
+      activateTab("formatted");
+
+      upsertTranslationResult(payload.translation);
+      updateTranslationCard(payload.translation);
+      rawBox.textContent = currentRawJson || "No raw JSON available";
+    }
+  };
+
+  window[CONTENT_GLOBAL.SHOW_RESULT] = async (payload) => {
+    await ensureModal();
+
+    isErrorState = false;
+    lastSourceText = payload?.sourceText || lastSourceText;
+    lastPageUrl = payload?.pageUrl || lastPageUrl;
+    const translations = normalizeResultTranslations(payload);
+    setRequestedLanguages(
+      Array.isArray(payload?.targetLanguages) && payload.targetLanguages.length
+        ? payload.targetLanguages
+        : translations.map((item) => item.targetLanguage).filter(Boolean)
     );
+    syncLegacyTranslationFields(translations);
+
+    updateTargetLanguageDisplay(lastRequestedLanguages);
+    updatePageSourceDisplay(lastPageUrl);
+    updateSourceTextDisplay(lastSourceText, false);
+    spinner.classList.add("alelo-hidden");
+    errorBox.innerHTML = "";
+    errorBox.classList.add("alelo-hidden");
+    closeSidePanels();
+
+    if (!payload?.finalizeOnly) {
+      formattedBox.innerHTML = renderTranslationsHtml(translations);
+    }
+
     rawBox.textContent = currentRawJson || "No raw JSON available";
     actionStatus.textContent = "";
 
     setRunningState(false);
     activateTab("formatted");
 
-    await saveToHistory(lastImageUrl, formattedText, currentRawJson, currentImageMetadata);
+    await saveToHistory({
+      sourceText: lastSourceText,
+      translations,
+      pageUrl: lastPageUrl
+    });
   };
 
-  window.__imageAnalyzerShowError = async (imageUrl, errorInfo) => {
+  window[CONTENT_GLOBAL.SHOW_ERROR] = async (payload) => {
     await ensureModal();
 
     isErrorState = true;
-    lastImageUrl = imageUrl || lastImageUrl;
+    lastSourceText = payload?.sourceText || lastSourceText;
+    if (Array.isArray(payload?.targetLanguages) && payload.targetLanguages.length) {
+      setRequestedLanguages(payload.targetLanguages);
+    } else if (payload?.targetLanguage) {
+      setRequestedLanguages([payload.targetLanguage]);
+    }
+    lastPageUrl = payload?.pageUrl || lastPageUrl;
+    const errorInfo = payload?.errorInfo || {};
 
-    const title = escapeHtml(errorInfo?.title || "Analysis failed");
-    const message = escapeHtml(errorInfo?.message || "An unknown error occurred.");
-    const hint = errorInfo?.hint ? escapeHtml(errorInfo.hint) : "";
+    const title = escapeHtml(errorInfo.title || "Translation failed");
+    const message = escapeHtml(errorInfo.message || "An unknown error occurred.");
+    const hint = errorInfo.hint ? escapeHtml(errorInfo.hint) : "";
 
-    imageBox.textContent = lastImageUrl;
-    updateImagePreview(lastImageUrl);
-    spinner.classList.add("ia-hidden");
+    updateTargetLanguageDisplay(lastRequestedLanguages);
+    updatePageSourceDisplay(lastPageUrl);
+    updateSourceTextDisplay(lastSourceText, false);
+    spinner.classList.add("alelo-hidden");
     formattedBox.innerHTML = "";
     rawBox.textContent = "";
     actionStatus.textContent = "";
     closeSidePanels();
 
     errorBox.innerHTML = `
-      <div class="ia-error-title">${title}</div>
-      <div class="ia-error-message">${message}</div>
-      ${hint ? `<div class="ia-error-hint">${hint}</div>` : ""}
+      <div class="alelo-error-title">${title}</div>
+      <div class="alelo-error-message">${message}</div>
+      ${hint ? `<div class="alelo-error-hint">${hint}</div>` : ""}
     `;
 
     currentRawJson = JSON.stringify(errorInfo, null, 2);
@@ -1100,7 +1163,7 @@
     activateTab("formatted");
 
     if (historyEntries.length) {
-      historyPanel.classList.remove("ia-hidden");
+      historyPanel.classList.remove("alelo-hidden");
       renderHistoryList();
     }
   };

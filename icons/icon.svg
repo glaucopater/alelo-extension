@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Alelo">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#111111"/>
+      <stop offset="100%" stop-color="#2a2a2a"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+  <path
+    fill="#ffffff"
+    d="M64 24 L92 88 H78 L72 72 H56 L50 88 H36 L64 24 Z M60 60 H68 L64 48 Z"
+  />
+  <path
+    fill="none"
+    stroke="#7dd3c0"
+    stroke-width="5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    d="M88 34 C96 34 102 40 102 48 C102 56 96 62 88 62"
+  />
+  <path
+    fill="#7dd3c0"
+    d="M96 58 L102 62 L96 66 Z"
+  />
+  <path
+    fill="none"
+    stroke="#7dd3c0"
+    stroke-width="5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    d="M40 94 C32 94 26 88 26 80 C26 72 32 66 40 66"
+  />
+  <path
+    fill="#7dd3c0"
+    d="M32 70 L26 66 L32 62 Z"
+  />
+</svg>

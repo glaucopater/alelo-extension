@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "scripts": {
+    "icons": "yarn dlx @resvg/resvg-js-cli icons/icon.svg icons/icon-128.png --fit-width 128 && yarn dlx @resvg/resvg-js-cli icons/icon.svg icons/icon-48.png --fit-width 48 && yarn dlx @resvg/resvg-js-cli icons/icon.svg icons/icon-32.png --fit-width 32 && yarn dlx @resvg/resvg-js-cli icons/icon.svg icons/icon-16.png --fit-width 16"
+  }
+}

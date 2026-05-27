@@ -1,24 +1,115 @@
+function cloneLanguagePresets() {
+  return LANGUAGES_PRESET.map((item) => ({ ...item }));
+}
+
+function cloneDefaultFavorites() {
+  return DEFAULT_FAVORITE_LANGUAGES.map((item) => ({ ...item }));
+}
+
 const DEFAULT_CONFIG = {
-  apiUrl: "http://localhost:11434/api/chat",
-  model: "gemma4:e2b",
-  authToken: ""
+  configVersion: CURRENT_CONFIG_VERSION,
+  apiUrl: DEFAULT_API_URL,
+  model: DEFAULT_MODEL,
+  authToken: "",
+  favoriteLanguages: cloneDefaultFavorites()
 };
 
-const CONFIG_STORAGE_KEY = "glowingMonocleConfig";
-const HISTORY_STORAGE_KEY = "glowingMonocleHistory";
-const MAX_HISTORY_ENTRIES = 30;
+function normalizeLanguageCode(code) {
+  return String(code || "")
+    .trim()
+    .replace(/_/g, "-")
+    .split("-")
+    .map((part, index) => (index === 0 ? part.toLowerCase() : part.toUpperCase()))
+    .join("-");
+}
+
+function normalizeLanguageEntry(entry) {
+  const code = normalizeLanguageCode(entry?.code);
+  const label = String(entry?.label || code).trim();
+  if (!code) return null;
+  return { code, label: label || code };
+}
+
+function validateFavoriteLanguages(favoriteLanguages) {
+  const input = Array.isArray(favoriteLanguages) ? favoriteLanguages : [];
+  const seen = new Set();
+  const normalized = [];
+
+  for (const item of input) {
+    const entry = normalizeLanguageEntry(item);
+    if (!entry || seen.has(entry.code)) continue;
+    seen.add(entry.code);
+    normalized.push(entry);
+  }
+
+  if (!normalized.length) {
+    return cloneDefaultFavorites();
+  }
+
+  return normalized;
+}
+
+function findLanguageByCode(code) {
+  const normalizedCode = normalizeLanguageCode(code);
+  return (
+    LANGUAGES_PRESET.find((lang) => normalizeLanguageCode(lang.code) === normalizedCode) || {
+      code: normalizedCode,
+      label: normalizedCode
+    }
+  );
+}
+
+function isFullPresetFavoriteList(favoriteLanguages) {
+  if (!Array.isArray(favoriteLanguages) || favoriteLanguages.length !== LANGUAGES_PRESET.length) {
+    return false;
+  }
+
+  const presetCodes = new Set(LANGUAGES_PRESET.map((lang) => normalizeLanguageCode(lang.code)));
+  return favoriteLanguages.every((lang) => presetCodes.has(normalizeLanguageCode(lang.code)));
+}
+
+function normalizeConfig(config) {
+  const storedVersion = config?.configVersion ?? 1;
+  let favoriteLanguages = validateFavoriteLanguages(config?.favoriteLanguages);
+  let model = String(config?.model || DEFAULT_CONFIG.model).trim();
+
+  if (storedVersion < 4 && (LEGACY_DEFAULT_MODELS.includes(model) || !model)) {
+    model = DEFAULT_CONFIG.model;
+  }
+
+  if (storedVersion < 5 && isFullPresetFavoriteList(favoriteLanguages)) {
+    favoriteLanguages = cloneDefaultFavorites();
+  }
+
+  return {
+    configVersion: CURRENT_CONFIG_VERSION,
+    apiUrl: String(config?.apiUrl || DEFAULT_CONFIG.apiUrl).trim(),
+    model,
+    authToken: String(config?.authToken || "").trim(),
+    favoriteLanguages
+  };
+}
 
 function getStoredConfig() {
   return new Promise((resolve) => {
     chrome.storage.local.get([CONFIG_STORAGE_KEY], (result) => {
-      resolve({ ...DEFAULT_CONFIG, ...(result[CONFIG_STORAGE_KEY] || {}) });
+      const stored = result[CONFIG_STORAGE_KEY] || {};
+      const normalized = normalizeConfig({ ...DEFAULT_CONFIG, ...stored });
+
+      if ((stored.configVersion ?? 1) < CURRENT_CONFIG_VERSION) {
+        chrome.storage.local.set({ [CONFIG_STORAGE_KEY]: normalized }, () => resolve(normalized));
+        return;
+      }
+
+      resolve(normalized);
     });
   });
 }
 
 function saveStoredConfig(config) {
+  const normalized = normalizeConfig(config);
   return new Promise((resolve) => {
-    chrome.storage.local.set({ [CONFIG_STORAGE_KEY]: config }, resolve);
+    chrome.storage.local.set({ [CONFIG_STORAGE_KEY]: normalized }, () => resolve(normalized));
   });
 }
 
