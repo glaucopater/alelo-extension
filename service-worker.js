@@ -207,6 +207,126 @@ async function updateSourceLanguage(tabId, payload) {
   });
 }
 
+async function showComposer(tabId, payload) {
+  await injectContentScript(tabId);
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (data, hookName) => {
+      if (window[hookName]) {
+        window[hookName](data);
+      }
+    },
+    args: [payload, CONTENT_GLOBAL.SHOW_COMPOSER]
+  });
+}
+
+async function getTabSelectionText(tabId) {
+  try {
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => window.getSelection()?.toString() || ""
+    });
+    return String(result?.result || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function deriveModelsEndpointUrls(apiUrl) {
+  const trimmed = String(apiUrl || "").trim();
+  if (!trimmed) return [];
+
+  const urls = [];
+  try {
+    const parsed = new URL(trimmed);
+    const origin = parsed.origin;
+
+    if (/\/api\/chat\/?$/i.test(parsed.pathname)) {
+      parsed.pathname = parsed.pathname.replace(/\/api\/chat\/?$/i, "/api/models");
+      urls.push(parsed.href);
+    } else if (/\/chat\/?$/i.test(parsed.pathname)) {
+      parsed.pathname = parsed.pathname.replace(/\/chat\/?$/i, "/models");
+      urls.push(parsed.href);
+    }
+
+    urls.push(`${origin}/api/models`, `${origin}/models`, `${origin}/api/tags`, `${origin}/v1/models`);
+  } catch {
+    return [];
+  }
+
+  return [...new Set(urls.filter(Boolean))];
+}
+
+function normalizeModelEntry(entry) {
+  if (typeof entry === "string") {
+    const name = entry.trim();
+    return name ? { name } : null;
+  }
+
+  const name = String(entry?.name || entry?.model || entry?.id || "").trim();
+  if (!name) return null;
+
+  const details = entry?.details && typeof entry.details === "object" ? entry.details : {};
+  return {
+    name,
+    parameterSize: String(details.parameter_size || entry?.parameter_size || "").trim(),
+    quantizationLevel: String(details.quantization_level || entry?.quantization_level || "").trim(),
+    family: String(details.family || entry?.family || "").trim(),
+    size: typeof entry?.size === "number" ? entry.size : null,
+    modifiedAt: String(entry?.modified_at || entry?.modifiedAt || "").trim()
+  };
+}
+
+function normalizeModelsPayload(data) {
+  if (!data) return [];
+
+  if (Array.isArray(data)) {
+    return data.map(normalizeModelEntry).filter(Boolean);
+  }
+
+  if (Array.isArray(data.models)) {
+    return data.models.map(normalizeModelEntry).filter(Boolean);
+  }
+
+  if (Array.isArray(data.data)) {
+    return data.data.map((item) => normalizeModelEntry({ name: item?.id, ...item })).filter(Boolean);
+  }
+
+  return [];
+}
+
+async function fetchAvailableModels(apiUrl, authToken) {
+  const headers = { Accept: "application/json" };
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+
+  const urls = deriveModelsEndpointUrls(apiUrl);
+  let lastError = "Could not load models";
+
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, { headers });
+      if (!response.ok) {
+        lastError = `HTTP ${response.status} from ${url}`;
+        continue;
+      }
+
+      const data = await response.json();
+      const models = normalizeModelsPayload(data);
+      if (models.length) {
+        return { ok: true, models, endpoint: url };
+      }
+
+      lastError = `No models returned from ${url}`;
+    } catch (error) {
+      lastError = error?.message || lastError;
+    }
+  }
+
+  return { ok: false, error: lastError, models: [] };
+}
+
 async function chatCompletion(config, messages) {
   const payload = {
     model: config.model,
@@ -478,6 +598,22 @@ chrome.runtime.onInstalled.addListener(() => {
 
 initializeExtension();
 
+chrome.action.onClicked.addListener(async (tab) => {
+  if (!tab?.id) return;
+
+  const pageUrl = tab.url || "";
+  if (pageUrl.startsWith("chrome://") || pageUrl.startsWith("chrome-extension://") || pageUrl.startsWith("edge://")) {
+    return;
+  }
+
+  try {
+    const initialText = await getTabSelectionText(tab.id);
+    await showComposer(tab.id, { initialText, pageUrl });
+  } catch {
+    // Injection blocked on this page (e.g. restricted URLs)
+  }
+});
+
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!tab?.id) return;
 
@@ -527,6 +663,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     saveStoredConfig(message.config)
       .then((config) => rebuildContextMenus().then(() => sendResponse({ ok: true, config })))
       .catch((error) => sendResponse({ ok: false, error: error?.message || "Save failed" }));
+    return true;
+  }
+
+  if (message.action === MESSAGE_ACTION.FETCH_MODELS) {
+    fetchAvailableModels(message.apiUrl, message.authToken)
+      .then((result) => sendResponse(result))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || "Could not load models", models: [] }));
     return true;
   }
 

@@ -33,7 +33,8 @@
 
 #alelo-overlay button,
 #alelo-overlay input,
-#alelo-overlay select {
+#alelo-overlay select,
+#alelo-overlay textarea {
   font: inherit;
   color: inherit;
   letter-spacing: normal;
@@ -70,13 +71,65 @@
 #alelo-modal {
   width: min(900px, calc(100vw - 32px));
   max-height: 85vh;
-  overflow: auto;
+  overflow: hidden;
   background: white;
   color: #111;
   border-radius: 14px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
   padding: 20px;
   position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.alelo-modal-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.alelo-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+#alelo-drawer-layer {
+  flex-shrink: 0;
+  width: 0;
+  overflow: hidden;
+  background: #f7f7f7;
+  border-left: 1px solid transparent;
+  transition: width 0.2s ease, border-color 0.2s ease;
+}
+
+#alelo-modal.alelo-drawer-open #alelo-drawer-layer:not(.alelo-hidden) {
+  width: min(360px, 42%);
+  border-left-color: #e4e4e4;
+}
+
+.alelo-drawer {
+  width: 360px;
+  max-width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 20px 18px 24px;
+  box-sizing: border-box;
+}
+
+.alelo-drawer-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 100%;
+}
+
+.alelo-panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 #alelo-header {
@@ -85,6 +138,7 @@
   align-items: flex-start;
   gap: 12px;
   margin-right: 36px;
+  flex-shrink: 0;
 }
 
 #alelo-header-actions {
@@ -125,6 +179,7 @@
   position: absolute;
   top: 10px;
   right: 12px;
+  z-index: 15;
   border: 0;
   background: transparent;
   font-size: 28px;
@@ -243,12 +298,83 @@
   text-decoration: underline;
 }
 
-.alelo-source-wrap {
+.alelo-source-wrap,
+.alelo-composer-wrap {
   background: #f9f9f9;
   border: 1px solid #e8e8e8;
   border-radius: 10px;
   padding: 12px 14px;
   margin: 0 0 16px;
+}
+
+.alelo-source-input {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+  padding: 10px 12px;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #333;
+  background: #fff;
+  resize: vertical;
+}
+
+.alelo-source-input:focus {
+  outline: 2px solid #4a90d9;
+  outline-offset: 1px;
+  border-color: #4a90d9;
+}
+
+.alelo-composer-lang-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.alelo-composer-lang-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.alelo-lang-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid #d0d0d0;
+  border-radius: 999px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: #222;
+}
+
+.alelo-lang-btn:hover:not(:disabled) {
+  border-color: #111;
+  background: #f5f5f5;
+}
+
+.alelo-lang-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.alelo-translate-all-btn {
+  flex-shrink: 0;
+}
+
+.alelo-composer-hint {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: #b42318;
+  min-height: 1.2em;
 }
 
 .alelo-source-label {
@@ -333,20 +459,11 @@
   letter-spacing: -0.5px;
 }
 
-#alelo-settings-panel {
-  background: #f9f9f9;
-  border: 1px solid #e0e0e0;
-  border-radius: 10px;
-  padding: 16px;
-  margin-bottom: 16px;
-}
-
-#alelo-history-panel {
-  background: #f9f9f9;
-  border: 1px solid #e0e0e0;
-  border-radius: 10px;
-  padding: 16px;
-  margin-bottom: 16px;
+#alelo-settings-btn.alelo-btn-active,
+#alelo-history-btn.alelo-btn-active {
+  background: #111;
+  color: #fff;
+  border-color: #111;
 }
 
 .alelo-panel-header {
@@ -354,11 +471,18 @@
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  margin-bottom: 12px;
+  margin: 0 0 20px;
+  padding: 6px 2px 0;
 }
 
 .alelo-panel-header h3 {
   margin: 0;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.alelo-drawer-panel > .alelo-field:first-of-type {
+  margin-top: 4px;
 }
 
 .alelo-btn-small {
@@ -390,7 +514,8 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 220px;
+  max-height: none;
+  flex: 1;
   overflow: auto;
 }
 
@@ -463,13 +588,13 @@
 .alelo-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: 12px;
+  gap: 8px;
+  margin-bottom: 20px;
   font-size: 13px;
 }
 
 .alelo-field span {
-  color: #444;
+  color: #333;
   font-weight: 600;
 }
 
@@ -478,15 +603,60 @@
   font-size: 12px;
   color: #666;
   font-weight: normal;
+  line-height: 1.45;
 }
 
+.alelo-field-hint-error {
+  color: #b42318;
+}
+
+.alelo-input,
 .alelo-field input,
+.alelo-field select,
 .alelo-select {
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  padding: 8px 10px;
+  width: 100%;
+  background: #fff;
+  color: #111;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  padding: 10px 12px;
   font-size: 14px;
+  line-height: 1.4;
   font-family: inherit;
+  box-shadow: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.alelo-input::placeholder,
+.alelo-field input::placeholder {
+  color: #888;
+}
+
+.alelo-input:focus,
+.alelo-field input:focus,
+.alelo-field select:focus,
+.alelo-select:focus {
+  outline: 2px solid #4a90d9;
+  outline-offset: 1px;
+  border-color: #4a90d9;
+}
+
+.alelo-model-picker {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.alelo-model-picker .alelo-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.alelo-model-picker .alelo-btn {
+  flex-shrink: 0;
+  align-self: stretch;
+  min-width: 40px;
 }
 
 .alelo-favorites-list {
@@ -544,7 +714,11 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  background: white;
+  background: #fff;
+  color: #111;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  padding: 10px 12px;
   cursor: pointer;
   min-height: 44px;
 }

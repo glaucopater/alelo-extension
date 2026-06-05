@@ -10,9 +10,28 @@ const DEFAULT_CONFIG = {
   configVersion: CURRENT_CONFIG_VERSION,
   apiUrl: DEFAULT_API_URL,
   model: DEFAULT_MODEL,
+  modelInfo: null,
   authToken: "",
   favoriteLanguages: cloneDefaultFavorites()
 };
+
+function normalizeModelInfo(info, modelName) {
+  if (!info || typeof info !== "object") {
+    return modelName ? { name: modelName } : null;
+  }
+
+  const name = String(info.name || modelName || "").trim();
+  if (!name) return null;
+
+  return {
+    name,
+    parameterSize: String(info.parameterSize || info.parameter_size || "").trim(),
+    quantizationLevel: String(info.quantizationLevel || info.quantization_level || "").trim(),
+    family: String(info.family || "").trim(),
+    size: typeof info.size === "number" ? info.size : null,
+    modifiedAt: String(info.modifiedAt || info.modified_at || "").trim()
+  };
+}
 
 function normalizeLanguageCode(code) {
   return String(code || "")
@@ -86,10 +105,13 @@ function normalizeConfig(config) {
     favoriteLanguages = cloneDefaultFavorites();
   }
 
+  const modelInfo = normalizeModelInfo(config?.modelInfo, model);
+
   return {
     configVersion: CURRENT_CONFIG_VERSION,
     apiUrl: String(config?.apiUrl || DEFAULT_CONFIG.apiUrl).trim(),
     model,
+    modelInfo: modelInfo?.name === model ? modelInfo : model ? { name: model } : null,
     authToken: String(config?.authToken || "").trim(),
     favoriteLanguages
   };

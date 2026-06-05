@@ -15,13 +15,20 @@
   let versionEl = null;
   let settingsBtn = null;
   let settingsPanel = null;
+  let settingsCloseBtn = null;
+  let modalEl = null;
+  let drawerLayer = null;
   let historyBtn = null;
   let historyPanel = null;
+  let historyCloseBtn = null;
   let historyList = null;
   let historyEmpty = null;
   let historyClearBtn = null;
   let configApiUrl = null;
   let configModel = null;
+  let configModelsRefreshBtn = null;
+  let configModelMeta = null;
+  let configModelsStatus = null;
   let configAuthToken = null;
   let configSaveBtn = null;
   let configStatus = null;
@@ -35,10 +42,16 @@
   let favoritesCustomLabel = null;
   let favoritesAddCustomBtn = null;
   let targetLangEl = null;
+  let composerLangBar = null;
+  let composerLangButtons = null;
   let pageSourceEl = null;
   let sourceTextEl = null;
+  let sourceInputEl = null;
   let sourceExpandBtn = null;
   let sourceWrap = null;
+  let composerWrap = null;
+  let translateBtn = null;
+  let composerHint = null;
 
   let currentRawJson = "";
   let currentTranslatedText = "";
@@ -51,11 +64,15 @@
   let lastPageUrl = "";
   let isErrorState = false;
   let isRunning = false;
+  let isComposerMode = false;
   let cssLoaded = false;
   let historyEntries = [];
   let activeHistoryId = null;
   let languagePresets = [];
   let draftFavoriteLanguages = [];
+  let availableModels = [];
+  let storedModelInfo = null;
+  let isLoadingModels = false;
 
   function closeModal() {
     if (shadowHost) {
@@ -521,7 +538,40 @@
   function setRequestedLanguages(languages) {
     lastRequestedLanguages = (languages || []).filter(Boolean);
     lastTargetLang = lastRequestedLanguages[0] || null;
-    updateLanguageRouteDisplay();
+    if (isComposerMode) {
+      updateComposerLanguageBar();
+    } else {
+      updateLanguageRouteDisplay();
+    }
+  }
+
+  function findFavoriteLanguage(code) {
+    const normalized = normalizeLanguageCode(code);
+    return lastRequestedLanguages.find(
+      (lang) => normalizeLanguageCode(lang.code) === normalized
+    );
+  }
+
+  function renderComposerLanguageButton(lang) {
+    const entry = resolveLanguageEntry(lang);
+    if (!entry) return "";
+
+    const code = normalizeLanguageCode(entry.code);
+    return `<button type="button" class="alelo-lang-btn" data-lang-code="${escapeHtml(code)}" title="Translate to ${escapeHtml(entry.label)}">${renderLanguageFlag(entry, 20)}<span class="alelo-lang-chip-label">${escapeHtml(entry.label)}</span></button>`;
+  }
+
+  function updateComposerLanguageBar() {
+    if (!composerLangButtons || !isComposerMode) return;
+
+    const favorites = lastRequestedLanguages || [];
+    composerLangButtons.innerHTML = favorites.map(renderComposerLanguageButton).join("");
+    hydrateLanguageFlags(composerLangButtons);
+
+    const enabled = favorites.length > 0 && !isRunning;
+    if (translateBtn) translateBtn.disabled = !enabled;
+    composerLangButtons.querySelectorAll(".alelo-lang-btn").forEach((btn) => {
+      btn.disabled = !enabled;
+    });
   }
 
   function renderTranslationMeta(stats) {
@@ -594,7 +644,99 @@
     const needsExpand = text.length > UI_LIMIT.SOURCE_TEXT_PREVIEW || text.includes("\n");
     sourceExpandBtn.classList.toggle("alelo-hidden", !needsExpand || expanded);
     sourceExpandBtn.textContent = expanded ? "Show less" : "Show more";
-    sourceWrap?.classList.toggle("alelo-hidden", !text);
+    if (!isComposerMode) {
+      sourceWrap?.classList.toggle("alelo-hidden", !text);
+    }
+  }
+
+  function setComposerMode(enabled) {
+    isComposerMode = enabled;
+    composerWrap?.classList.toggle("alelo-hidden", !enabled);
+    sourceWrap?.classList.toggle("alelo-hidden", enabled);
+    targetLangEl?.classList.toggle("alelo-hidden", enabled);
+    composerLangBar?.classList.toggle("alelo-hidden", !enabled);
+
+    if (enabled) {
+      formattedBox.innerHTML = "";
+      rawBox.textContent = "";
+      errorBox.innerHTML = "";
+      errorBox.classList.add("alelo-hidden");
+      spinner.classList.add("alelo-hidden");
+      isErrorState = false;
+      activeHistoryId = null;
+      setRunningState(false);
+      if (runBtn) runBtn.disabled = true;
+      activateTab("formatted");
+      closeSidePanels();
+      updateComposerLanguageBar();
+    } else {
+      updateLanguageRouteDisplay();
+    }
+  }
+
+  function updateComposerHint(message = "") {
+    if (!composerHint) return;
+    composerHint.textContent = message;
+  }
+
+  async function openComposer(payload) {
+    await ensureModal();
+
+    let favorites = [];
+    try {
+      const response = await chrome.runtime.sendMessage({ action: MESSAGE_ACTION.GET_CONFIG });
+      favorites = response?.ok ? response.config?.favoriteLanguages || [] : [];
+    } catch {
+      favorites = [];
+    }
+
+    lastSourceText = "";
+    lastPageUrl = payload?.pageUrl || window.location.href;
+    lastTranslations = [];
+    currentRawJson = "";
+    currentTranslatedText = "";
+    setRequestedLanguages(favorites);
+    setSourceLanguageState(null, false);
+    updatePageSourceDisplay(lastPageUrl);
+    updateSourceTextDisplay("", false);
+    setComposerMode(true);
+
+    if (sourceInputEl) {
+      sourceInputEl.value = payload?.initialText || "";
+      sourceInputEl.focus();
+    }
+
+    if (!favorites.length) {
+      updateComposerHint("Add at least one favorite language in Settings.");
+    } else {
+      updateComposerHint("");
+    }
+    updateComposerLanguageBar();
+  }
+
+  async function submitComposerTranslation(targetLanguages = null) {
+    const text = sourceInputEl?.value?.trim() || "";
+    const langs = Array.isArray(targetLanguages) ? targetLanguages.filter(Boolean) : lastRequestedLanguages;
+
+    if (!text) {
+      updateComposerHint("Enter some text to translate.");
+      sourceInputEl?.focus();
+      return;
+    }
+
+    if (!langs.length) {
+      updateComposerHint("Add at least one favorite language in Settings.");
+      openSidePanel(settingsPanel);
+      loadConfigIntoForm();
+      return;
+    }
+
+    updateComposerHint("");
+    lastSourceText = text;
+    setRequestedLanguages(langs);
+    setComposerMode(false);
+    updateSourceTextDisplay(lastSourceText, false);
+    await runTranslation();
   }
 
   function bindHistoryStorageSync() {
@@ -662,9 +804,38 @@
     historyBtn.dataset.count = count ? String(count) : "";
   }
 
+  function isDrawerPanelOpen(panel) {
+    return Boolean(
+      panel &&
+        drawerLayer &&
+        !drawerLayer.classList.contains("alelo-hidden") &&
+        !panel.classList.contains("alelo-hidden")
+    );
+  }
+
+  function openSidePanel(panel) {
+    if (!drawerLayer || !panel) return;
+
+    closeSidePanels();
+    drawerLayer.classList.remove("alelo-hidden");
+    drawerLayer.setAttribute("aria-hidden", "false");
+    modalEl?.classList.add("alelo-drawer-open");
+    panel.classList.remove("alelo-hidden");
+
+    const isSettings = panel === settingsPanel;
+    settingsBtn?.classList.toggle("alelo-btn-active", isSettings);
+    historyBtn?.classList.toggle("alelo-btn-active", !isSettings);
+  }
+
   function closeSidePanels() {
     settingsPanel?.classList.add("alelo-hidden");
     historyPanel?.classList.add("alelo-hidden");
+    drawerLayer?.classList.add("alelo-hidden");
+    drawerLayer?.setAttribute("aria-hidden", "true");
+    modalEl?.classList.remove("alelo-drawer-open");
+    settingsBtn?.classList.remove("alelo-btn-active");
+    historyBtn?.classList.remove("alelo-btn-active");
+    closePresetPicker();
   }
 
   function renderHistoryList() {
@@ -713,6 +884,7 @@
   function restoreHistoryEntry(entry) {
     if (!entry) return;
 
+    setComposerMode(false);
     isErrorState = false;
     activeHistoryId = entry.id;
     lastSourceText = entry.sourceText || "";
@@ -769,12 +941,13 @@
   }
 
   function toggleHistoryPanel() {
-    const isHidden = historyPanel.classList.contains("alelo-hidden");
-    closeSidePanels();
-    historyPanel.classList.toggle("alelo-hidden", !isHidden);
-    if (isHidden) {
-      fetchHistory();
+    if (isDrawerPanelOpen(historyPanel)) {
+      closeSidePanels();
+      return;
     }
+
+    openSidePanel(historyPanel);
+    fetchHistory();
   }
 
   function copyFallback(text) {
@@ -834,6 +1007,9 @@
 
   function setRunningState(running) {
     isRunning = running;
+    if (isComposerMode) {
+      updateComposerLanguageBar();
+    }
     if (runBtn) {
       runBtn.disabled = running || !lastSourceText || !lastRequestedLanguages.length;
       runBtn.classList.toggle("alelo-running", running);
@@ -1044,14 +1220,21 @@
     tabRaw = root.querySelector("#alelo-tab-raw");
     versionEl = root.querySelector("#alelo-extension-version");
     settingsBtn = root.querySelector("#alelo-settings-btn");
+    modalEl = root.querySelector("#alelo-modal");
+    drawerLayer = root.querySelector("#alelo-drawer-layer");
     settingsPanel = root.querySelector("#alelo-settings-panel");
+    settingsCloseBtn = root.querySelector("#alelo-settings-close-btn");
     historyBtn = root.querySelector("#alelo-history-btn");
     historyPanel = root.querySelector("#alelo-history-panel");
+    historyCloseBtn = root.querySelector("#alelo-history-close-btn");
     historyList = root.querySelector("#alelo-history-list");
     historyEmpty = root.querySelector("#alelo-history-empty");
     historyClearBtn = root.querySelector("#alelo-history-clear-btn");
     configApiUrl = root.querySelector("#alelo-config-api-url");
     configModel = root.querySelector("#alelo-config-model");
+    configModelsRefreshBtn = root.querySelector("#alelo-config-models-refresh-btn");
+    configModelMeta = root.querySelector("#alelo-config-model-meta");
+    configModelsStatus = root.querySelector("#alelo-config-models-status");
     configAuthToken = root.querySelector("#alelo-config-auth-token");
     configSaveBtn = root.querySelector("#alelo-config-save-btn");
     configStatus = root.querySelector("#alelo-config-status");
@@ -1064,10 +1247,142 @@
     favoritesCustomLabel = root.querySelector("#alelo-favorites-custom-label");
     favoritesAddCustomBtn = root.querySelector("#alelo-favorites-add-custom-btn");
     targetLangEl = root.querySelector("#alelo-target-lang");
+    composerLangBar = root.querySelector("#alelo-composer-lang-bar");
+    composerLangButtons = root.querySelector("#alelo-composer-lang-buttons");
     pageSourceEl = root.querySelector("#alelo-page-source");
     sourceTextEl = root.querySelector("#alelo-source-text");
+    sourceInputEl = root.querySelector("#alelo-source-input");
     sourceExpandBtn = root.querySelector("#alelo-source-expand-btn");
     sourceWrap = root.querySelector("#alelo-source-wrap");
+    composerWrap = root.querySelector("#alelo-composer-wrap");
+    translateBtn = root.querySelector("#alelo-translate-btn");
+    composerHint = root.querySelector("#alelo-composer-hint");
+  }
+
+  function formatModelOptionLabel(model) {
+    const meta = [];
+    if (model?.parameterSize) meta.push(model.parameterSize);
+    if (model?.quantizationLevel) meta.push(model.quantizationLevel);
+    return meta.length ? `${model.name} (${meta.join(" · ")})` : model.name;
+  }
+
+  function formatModelMeta(model) {
+    if (!model) return "";
+    const parts = [];
+    if (model.family) parts.push(model.family);
+    if (model.parameterSize) parts.push(model.parameterSize);
+    if (model.quantizationLevel) parts.push(model.quantizationLevel);
+    if (typeof model.size === "number" && model.size > 0) {
+      parts.push(`${(model.size / 1e9).toFixed(1)} GB`);
+    }
+    return parts.join(" · ");
+  }
+
+  function getSelectedModelEntry() {
+    const selectedName = configModel?.value || "";
+    return (
+      availableModels.find((model) => model.name === selectedName) ||
+      (storedModelInfo?.name === selectedName ? storedModelInfo : null) ||
+      (selectedName ? { name: selectedName } : null)
+    );
+  }
+
+  function updateModelMetaDisplay() {
+    if (!configModelMeta) return;
+
+    const meta = formatModelMeta(getSelectedModelEntry());
+    if (meta) {
+      configModelMeta.textContent = meta;
+      configModelMeta.classList.remove("alelo-hidden");
+    } else {
+      configModelMeta.textContent = "";
+      configModelMeta.classList.add("alelo-hidden");
+    }
+  }
+
+  function setModelsStatus(message, isError = false) {
+    if (!configModelsStatus) return;
+    configModelsStatus.textContent = message;
+    configModelsStatus.classList.toggle("alelo-field-hint-error", Boolean(isError && message));
+  }
+
+  function renderModelSelect(selectedModel = "") {
+    if (!configModel) return;
+
+    const previous = selectedModel || configModel.value || storedModelInfo?.name || "";
+    const models = [...availableModels];
+    const hasPrevious = previous && !models.some((model) => model.name === previous);
+
+    if (hasPrevious) {
+      models.unshift(storedModelInfo?.name === previous ? { ...storedModelInfo } : { name: previous });
+    }
+
+    if (!models.length) {
+      configModel.innerHTML = `<option value="">No models available</option>`;
+      configModel.disabled = true;
+      updateModelMetaDisplay();
+      return;
+    }
+
+    configModel.disabled = false;
+    configModel.innerHTML = models
+      .map((model) => {
+        const selected = model.name === previous ? " selected" : "";
+        return `<option value="${escapeHtml(model.name)}"${selected}>${escapeHtml(formatModelOptionLabel(model))}</option>`;
+      })
+      .join("");
+
+    if (previous && models.some((model) => model.name === previous)) {
+      configModel.value = previous;
+    }
+
+    updateModelMetaDisplay();
+  }
+
+  async function loadModelsList({ preserveSelection = true, selectedModel = "" } = {}) {
+    if (!configApiUrl || !configModel || isLoadingModels) return;
+
+    const apiUrl = configApiUrl.value.trim();
+    if (!apiUrl) {
+      setModelsStatus("Enter an API URL first.", true);
+      return;
+    }
+
+    const activeModel = preserveSelection
+      ? selectedModel || configModel.value || storedModelInfo?.name || ""
+      : selectedModel;
+    isLoadingModels = true;
+    if (configModelsRefreshBtn) configModelsRefreshBtn.disabled = true;
+    setModelsStatus("Loading models…");
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        action: MESSAGE_ACTION.FETCH_MODELS,
+        apiUrl,
+        authToken: configAuthToken?.value.trim() || ""
+      });
+
+      if (response?.ok && Array.isArray(response.models)) {
+        availableModels = response.models;
+        renderModelSelect(activeModel);
+        setModelsStatus(
+          response.models.length
+            ? `${response.models.length} model${response.models.length === 1 ? "" : "s"} loaded`
+            : "No models returned by the API."
+        );
+      } else {
+        availableModels = [];
+        renderModelSelect(activeModel);
+        setModelsStatus(response?.error || "Could not load models", true);
+      }
+    } catch (error) {
+      availableModels = [];
+      renderModelSelect(activeModel);
+      setModelsStatus(error?.message || "Could not load models", true);
+    } finally {
+      isLoadingModels = false;
+      if (configModelsRefreshBtn) configModelsRefreshBtn.disabled = false;
+    }
   }
 
   async function loadConfigIntoForm() {
@@ -1075,8 +1390,8 @@
       const response = await chrome.runtime.sendMessage({ action: MESSAGE_ACTION.GET_CONFIG });
       if (response?.ok && response.config) {
         configApiUrl.value = response.config.apiUrl || "";
-        configModel.value = response.config.model || "";
         configAuthToken.value = response.config.authToken || "";
+        storedModelInfo = response.config.modelInfo || null;
         languagePresets = response.languagePresets || [];
         draftFavoriteLanguages = (response.config.favoriteLanguages || []).map((lang) => ({
           code: lang.code,
@@ -1084,6 +1399,10 @@
         }));
         renderFavoritesList();
         populatePresetPicker();
+        await loadModelsList({
+          preserveSelection: true,
+          selectedModel: response.config.model || ""
+        });
       }
     } catch {
       // Settings unavailable — form stays empty
@@ -1091,9 +1410,11 @@
   }
 
   async function saveConfig() {
+    const selectedModel = getSelectedModelEntry();
     const config = {
       apiUrl: configApiUrl.value.trim(),
-      model: configModel.value.trim(),
+      model: (configModel?.value || selectedModel?.name || "").trim(),
+      modelInfo: selectedModel,
       authToken: configAuthToken.value.trim(),
       favoriteLanguages: draftFavoriteLanguages
     };
@@ -1111,12 +1432,14 @@
     try {
       const response = await chrome.runtime.sendMessage({ action: MESSAGE_ACTION.SAVE_CONFIG, config });
       if (response?.ok) {
+        storedModelInfo = response.config?.modelInfo || null;
         draftFavoriteLanguages = (response.config?.favoriteLanguages || draftFavoriteLanguages).map((lang) => ({
           code: lang.code,
           label: lang.label
         }));
         renderFavoritesList();
         populatePresetPicker();
+        updateModelMetaDisplay();
         configStatus.textContent = "Saved";
       } else {
         configStatus.textContent = response?.error || "Save failed";
@@ -1130,12 +1453,13 @@
   }
 
   function toggleSettingsPanel() {
-    const isHidden = settingsPanel.classList.contains("alelo-hidden");
-    closeSidePanels();
-    settingsPanel.classList.toggle("alelo-hidden", !isHidden);
-    if (isHidden) {
-      loadConfigIntoForm();
+    if (isDrawerPanelOpen(settingsPanel)) {
+      closeSidePanels();
+      return;
     }
+
+    openSidePanel(settingsPanel);
+    loadConfigIntoForm();
   }
 
   async function runTranslation() {
@@ -1192,10 +1516,35 @@
     });
     copyBtn.addEventListener("click", copyTranslation);
     runBtn.addEventListener("click", runTranslation);
+    translateBtn.addEventListener("click", () => submitComposerTranslation());
+    composerLangButtons?.addEventListener("click", (event) => {
+      const btn = event.target.closest(".alelo-lang-btn");
+      if (!btn || btn.disabled) return;
+      const lang = findFavoriteLanguage(btn.dataset.langCode);
+      if (lang) submitComposerTranslation([lang]);
+    });
+    sourceInputEl?.addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        submitComposerTranslation();
+      }
+    });
     historyBtn.addEventListener("click", toggleHistoryPanel);
+    historyCloseBtn?.addEventListener("click", closeSidePanels);
     historyClearBtn.addEventListener("click", clearHistory);
     settingsBtn.addEventListener("click", toggleSettingsPanel);
+    settingsCloseBtn?.addEventListener("click", closeSidePanels);
+    root.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && drawerLayer && !drawerLayer.classList.contains("alelo-hidden")) {
+        event.preventDefault();
+        closeSidePanels();
+      }
+    });
     configSaveBtn.addEventListener("click", saveConfig);
+    configModelsRefreshBtn?.addEventListener("click", () => loadModelsList({ preserveSelection: true }));
+    configModel?.addEventListener("change", updateModelMetaDisplay);
+    configApiUrl?.addEventListener("change", () => loadModelsList({ preserveSelection: true }));
+    configAuthToken?.addEventListener("change", () => loadModelsList({ preserveSelection: true }));
 
     sourceExpandBtn.addEventListener("click", () => {
       const expanded = sourceTextEl.classList.contains("alelo-source-expanded");
@@ -1316,6 +1665,7 @@
   }
 
   function resetToLoadingState(payload) {
+    setComposerMode(false);
     isErrorState = false;
     activeHistoryId = null;
     lastSourceText = payload?.sourceText || "";
@@ -1353,6 +1703,10 @@
     activateTab("formatted");
   }
 
+  window[CONTENT_GLOBAL.SHOW_COMPOSER] = async (payload) => {
+    await openComposer(payload);
+  };
+
   window[CONTENT_GLOBAL.SHOW_LOADING] = async (payload) => {
     await ensureModal();
     resetToLoadingState(payload);
@@ -1360,6 +1714,7 @@
 
   window[CONTENT_GLOBAL.SHOW_PARTIAL] = async (payload) => {
     await ensureModal();
+    setComposerMode(false);
 
     isErrorState = false;
     lastSourceText = payload?.sourceText || lastSourceText;
@@ -1383,6 +1738,7 @@
 
   window[CONTENT_GLOBAL.SHOW_RESULT] = async (payload) => {
     await ensureModal();
+    setComposerMode(false);
 
     isErrorState = false;
     lastSourceText = payload?.sourceText || lastSourceText;
@@ -1440,6 +1796,7 @@
 
   window[CONTENT_GLOBAL.SHOW_ERROR] = async (payload) => {
     await ensureModal();
+    setComposerMode(false);
 
     isErrorState = true;
     lastSourceText = payload?.sourceText || lastSourceText;
@@ -1477,7 +1834,7 @@
     activateTab("formatted");
 
     if (historyEntries.length) {
-      historyPanel.classList.remove("alelo-hidden");
+      openSidePanel(historyPanel);
       renderHistoryList();
     }
   };
