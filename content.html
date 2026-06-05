@@ -16,28 +16,86 @@
       </div>
     </div>
 
-    <div id="alelo-history-panel" class="alelo-hidden">
-      <div class="alelo-panel-header">
-        <h3>History</h3>
-        <button type="button" id="alelo-history-clear-btn" class="alelo-btn alelo-btn-small">Clear all</button>
+    <div id="alelo-modal-body" class="alelo-modal-body">
+    <div id="alelo-main" class="alelo-main">
+    <div id="alelo-context" class="alelo-context">
+      <div id="alelo-target-lang" class="alelo-target-lang"></div>
+      <div id="alelo-composer-lang-bar" class="alelo-composer-lang-bar alelo-hidden">
+        <div id="alelo-composer-lang-buttons" class="alelo-composer-lang-buttons"></div>
+        <button type="button" id="alelo-translate-btn" class="alelo-btn alelo-btn-primary alelo-translate-all-btn">
+          Translate in all languages
+        </button>
       </div>
-      <div id="alelo-history-list"></div>
-      <p id="alelo-history-empty" class="alelo-history-empty alelo-hidden">No previous translations saved yet.</p>
+      <div id="alelo-page-source" class="alelo-page-source"></div>
     </div>
 
-    <div id="alelo-settings-panel" class="alelo-hidden">
-      <h3>Settings</h3>
+    <div id="alelo-composer-wrap" class="alelo-composer-wrap alelo-hidden">
+      <div class="alelo-source-label">Text to translate</div>
+      <textarea
+        id="alelo-source-input"
+        class="alelo-source-input"
+        rows="5"
+        placeholder="Enter text to translate…"
+      ></textarea>
+      <p id="alelo-composer-hint" class="alelo-composer-hint"></p>
+    </div>
+
+    <div id="alelo-source-wrap" class="alelo-source-wrap">
+      <div class="alelo-source-label">Source text</div>
+      <div id="alelo-source-text" class="alelo-source-text"></div>
+      <button type="button" id="alelo-source-expand-btn" class="alelo-btn alelo-btn-small alelo-hidden">Show more</button>
+    </div>
+
+    <div id="alelo-spinner" class="alelo-hidden" aria-label="Translating">
+      <div class="alelo-spinner"></div>
+    </div>
+
+    <div id="alelo-error" class="alelo-error-panel alelo-hidden"></div>
+    <div id="alelo-formatted" class="alelo-panel alelo-markdown"></div>
+    <pre id="alelo-raw" class="alelo-panel alelo-hidden"></pre>
+    </div>
+
+    <div id="alelo-drawer-layer" class="alelo-hidden" aria-hidden="true">
+      <aside id="alelo-drawer" class="alelo-drawer" aria-label="Side panel">
+        <div id="alelo-history-panel" class="alelo-drawer-panel alelo-hidden">
+          <div class="alelo-panel-header">
+            <h3>History</h3>
+            <div class="alelo-panel-header-actions">
+              <button type="button" id="alelo-history-clear-btn" class="alelo-btn alelo-btn-small">Clear all</button>
+              <button type="button" id="alelo-history-close-btn" class="alelo-btn alelo-icon-btn" aria-label="Close history" title="Close">×</button>
+            </div>
+          </div>
+          <div id="alelo-history-list"></div>
+          <p id="alelo-history-empty" class="alelo-history-empty alelo-hidden">No previous translations saved yet.</p>
+        </div>
+
+        <div id="alelo-settings-panel" class="alelo-drawer-panel alelo-hidden">
+          <div class="alelo-panel-header">
+            <h3>Settings</h3>
+            <button type="button" id="alelo-settings-close-btn" class="alelo-btn alelo-icon-btn" aria-label="Close settings" title="Close">×</button>
+          </div>
       <label class="alelo-field">
         <span>API URL</span>
-        <input type="url" id="alelo-config-api-url" placeholder="http://localhost:11434/api/chat" />
+        <input type="url" id="alelo-config-api-url" class="alelo-input" placeholder="http://localhost:11434/api/chat" />
       </label>
       <label class="alelo-field">
         <span>Model</span>
-        <input type="text" id="alelo-config-model" placeholder="gemma4:e2b" />
+        <div class="alelo-model-picker">
+          <select id="alelo-config-model" class="alelo-select alelo-input"></select>
+          <button
+            type="button"
+            id="alelo-config-models-refresh-btn"
+            class="alelo-btn alelo-btn-small alelo-icon-btn"
+            aria-label="Refresh models"
+            title="Refresh models"
+          >↻</button>
+        </div>
+        <p id="alelo-config-model-meta" class="alelo-field-hint alelo-hidden"></p>
+        <p id="alelo-config-models-status" class="alelo-field-hint"></p>
       </label>
       <label class="alelo-field">
         <span>Auth token (optional)</span>
-        <input type="password" id="alelo-config-auth-token" placeholder="Leave empty if not required" autocomplete="off" />
+        <input type="password" id="alelo-config-auth-token" class="alelo-input" placeholder="Leave empty if not required" autocomplete="off" />
       </label>
 
       <div class="alelo-field">
@@ -64,8 +122,8 @@
           <button type="button" id="alelo-favorites-add-btn" class="alelo-btn alelo-btn-small">Add</button>
         </div>
         <div class="alelo-favorites-custom">
-          <input type="text" id="alelo-favorites-custom-code" placeholder="Custom code (e.g. pt-BR)" />
-          <input type="text" id="alelo-favorites-custom-label" placeholder="Custom label" />
+          <input type="text" id="alelo-favorites-custom-code" class="alelo-input" placeholder="Custom code (e.g. pt-BR)" />
+          <input type="text" id="alelo-favorites-custom-label" class="alelo-input" placeholder="Custom label" />
           <button type="button" id="alelo-favorites-add-custom-btn" class="alelo-btn alelo-btn-small">Add custom</button>
         </div>
       </div>
@@ -74,25 +132,9 @@
         <button type="button" id="alelo-config-save-btn" class="alelo-btn alelo-btn-primary">Save</button>
         <span id="alelo-config-status"></span>
       </div>
+        </div>
+      </aside>
     </div>
-
-    <div id="alelo-context" class="alelo-context">
-      <div id="alelo-target-lang" class="alelo-target-lang"></div>
-      <div id="alelo-page-source" class="alelo-page-source"></div>
     </div>
-
-    <div id="alelo-source-wrap" class="alelo-source-wrap">
-      <div class="alelo-source-label">Source text</div>
-      <div id="alelo-source-text" class="alelo-source-text"></div>
-      <button type="button" id="alelo-source-expand-btn" class="alelo-btn alelo-btn-small alelo-hidden">Show more</button>
-    </div>
-
-    <div id="alelo-spinner" class="alelo-hidden" aria-label="Translating">
-      <div class="alelo-spinner"></div>
-    </div>
-
-    <div id="alelo-error" class="alelo-error-panel alelo-hidden"></div>
-    <div id="alelo-formatted" class="alelo-panel alelo-markdown"></div>
-    <pre id="alelo-raw" class="alelo-panel alelo-hidden"></pre>
   </div>
 </div>

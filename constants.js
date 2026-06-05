@@ -2,7 +2,7 @@ const CONFIG_STORAGE_KEY = "aleloConfig";
 const HISTORY_STORAGE_KEY = "aleloHistory";
 const MAX_HISTORY_ENTRIES = 30;
 
-const CURRENT_CONFIG_VERSION = 5;
+const CURRENT_CONFIG_VERSION = 6;
 const DEFAULT_API_URL = "http://localhost:11434/api/chat";
 const DEFAULT_MODEL = "gemma4:e2b";
 const LEGACY_DEFAULT_MODELS = ["llama3.2", "qwen3.5:9b"];
@@ -79,7 +79,8 @@ const MESSAGE_ACTION = {
   SAVE_HISTORY_ENTRY: "save-history-entry",
   CLEAR_HISTORY: "clear-history",
   REMOVE_HISTORY_ENTRY: "remove-history-entry",
-  GET_FLAG_IMAGE: "get-flag-image"
+  GET_FLAG_IMAGE: "get-flag-image",
+  FETCH_MODELS: "fetch-models"
 };
 
 const CONTENT_GLOBAL = {
@@ -89,6 +90,7 @@ const CONTENT_GLOBAL = {
   SHOW_PARTIAL: "__aleloShowPartial",
   SHOW_RESULT: "__aleloShowResult",
   SHOW_ERROR: "__aleloShowError",
+  SHOW_COMPOSER: "__aleloShowComposer",
   UPDATE_SOURCE_LANGUAGE: "__aleloUpdateSourceLanguage"
 };
 
