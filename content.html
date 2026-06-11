@@ -98,14 +98,14 @@
         <input type="password" id="alelo-config-auth-token" class="alelo-input" placeholder="Leave empty if not required" autocomplete="off" />
       </label>
 
-      <div class="alelo-field">
+      <div class="alelo-field alelo-field-favorites">
         <span>Favorite languages</span>
         <p class="alelo-field-hint">These appear in the right-click menu when you select text.</p>
         <p class="alelo-field-hint alelo-flag-attribution">
           Flag icons by <a href="https://flagpedia.net" target="_blank" rel="noopener noreferrer">Flagpedia.net</a>
         </p>
         <div id="alelo-favorites-list" class="alelo-favorites-list"></div>
-        <div class="alelo-favorites-add">
+        <div id="alelo-favorites-add-row" class="alelo-favorites-add">
           <div id="alelo-favorites-picker" class="alelo-lang-picker">
             <button
               type="button"
@@ -117,9 +117,9 @@
               <span class="alelo-lang-picker-value alelo-lang-picker-placeholder">Add a language…</span>
               <span class="alelo-lang-picker-chevron" aria-hidden="true">▾</span>
             </button>
-            <ul id="alelo-favorites-picker-menu" class="alelo-lang-picker-menu alelo-hidden" role="listbox"></ul>
           </div>
           <button type="button" id="alelo-favorites-add-btn" class="alelo-btn alelo-btn-small">Add</button>
+          <ul id="alelo-favorites-picker-menu" class="alelo-lang-picker-menu alelo-hidden" role="listbox"></ul>
         </div>
         <div class="alelo-favorites-custom">
           <input type="text" id="alelo-favorites-custom-code" class="alelo-input" placeholder="Custom code (e.g. pt-BR)" />

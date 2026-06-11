@@ -36,6 +36,7 @@
   let favoritesPicker = null;
   let favoritesPickerTrigger = null;
   let favoritesPickerMenu = null;
+  let favoritesAddRow = null;
   let selectedPresetCode = "";
   let favoritesAddBtn = null;
   let favoritesCustomCode = null;
@@ -1064,18 +1065,88 @@
     hydrateLanguageFlags(favoritesList);
   }
 
+  function resetPresetPickerMenuPosition() {
+    if (!favoritesPickerMenu) return;
+    favoritesPickerMenu.style.position = "";
+    favoritesPickerMenu.style.top = "";
+    favoritesPickerMenu.style.bottom = "";
+    favoritesPickerMenu.style.left = "";
+    favoritesPickerMenu.style.width = "";
+    favoritesPickerMenu.style.maxHeight = "";
+    favoritesPickerMenu.style.zIndex = "";
+  }
+
+  function positionPresetPickerMenu() {
+    if (!favoritesPickerMenu || !favoritesAddRow || favoritesPickerMenu.classList.contains("alelo-hidden")) {
+      return;
+    }
+
+    const rect = favoritesAddRow.getBoundingClientRect();
+    const maxHeight = 220;
+    const viewportPadding = 8;
+    const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
+    const openUpward = spaceBelow < 120 && rect.top > spaceBelow;
+    const availableHeight = openUpward ? rect.top - viewportPadding - 4 : spaceBelow;
+
+    favoritesPickerMenu.style.position = "fixed";
+    favoritesPickerMenu.style.left = `${rect.left}px`;
+    favoritesPickerMenu.style.width = `${rect.width}px`;
+    favoritesPickerMenu.style.maxHeight = `${Math.max(80, Math.min(maxHeight, availableHeight))}px`;
+    favoritesPickerMenu.style.zIndex = "2147483646";
+
+    if (openUpward) {
+      favoritesPickerMenu.style.top = "auto";
+      favoritesPickerMenu.style.bottom = `${window.innerHeight - rect.top + 4}px`;
+    } else {
+      favoritesPickerMenu.style.top = `${rect.bottom + 4}px`;
+      favoritesPickerMenu.style.bottom = "auto";
+    }
+  }
+
+  function onPresetPickerLayoutChange() {
+    positionPresetPickerMenu();
+  }
+
+  function bindPresetPickerLayoutListeners() {
+    window.addEventListener("resize", onPresetPickerLayoutChange, { passive: true });
+    overlay?.querySelector(".alelo-drawer")?.addEventListener("scroll", onPresetPickerLayoutChange, { passive: true });
+  }
+
+  function unbindPresetPickerLayoutListeners() {
+    window.removeEventListener("resize", onPresetPickerLayoutChange);
+    overlay?.querySelector(".alelo-drawer")?.removeEventListener("scroll", onPresetPickerLayoutChange);
+  }
+
+  function mountPresetPickerMenu() {
+    if (!favoritesPickerMenu || !overlay) return;
+    overlay.appendChild(favoritesPickerMenu);
+  }
+
+  function unmountPresetPickerMenu() {
+    if (!favoritesPickerMenu || !favoritesAddRow) return;
+    favoritesAddRow.appendChild(favoritesPickerMenu);
+  }
+
   function closePresetPicker() {
     if (!favoritesPickerMenu || !favoritesPickerTrigger) return;
     favoritesPickerMenu.classList.add("alelo-hidden");
     favoritesPickerTrigger.setAttribute("aria-expanded", "false");
+    favoritesAddRow?.classList.remove("alelo-lang-picker-open");
+    resetPresetPickerMenuPosition();
+    unbindPresetPickerLayoutListeners();
+    unmountPresetPickerMenu();
   }
 
   function togglePresetPicker() {
     if (!favoritesPickerMenu || !favoritesPickerTrigger || favoritesPickerTrigger.disabled) return;
     const open = favoritesPickerMenu.classList.contains("alelo-hidden");
     if (open) {
+      mountPresetPickerMenu();
       favoritesPickerMenu.classList.remove("alelo-hidden");
       favoritesPickerTrigger.setAttribute("aria-expanded", "true");
+      favoritesAddRow?.classList.add("alelo-lang-picker-open");
+      positionPresetPickerMenu();
+      bindPresetPickerLayoutListeners();
     } else {
       closePresetPicker();
     }
@@ -1151,6 +1222,7 @@
     renderPresetPickerTrigger();
     hydrateLanguageFlags(favoritesPickerMenu);
     hydrateLanguageFlags(favoritesPickerTrigger);
+    positionPresetPickerMenu();
   }
 
   function addFavoriteLanguage(entry) {
@@ -1242,6 +1314,7 @@
     favoritesPicker = root.querySelector("#alelo-favorites-picker");
     favoritesPickerTrigger = root.querySelector("#alelo-favorites-picker-trigger");
     favoritesPickerMenu = root.querySelector("#alelo-favorites-picker-menu");
+    favoritesAddRow = root.querySelector("#alelo-favorites-add-row");
     favoritesAddBtn = root.querySelector("#alelo-favorites-add-btn");
     favoritesCustomCode = root.querySelector("#alelo-favorites-custom-code");
     favoritesCustomLabel = root.querySelector("#alelo-favorites-custom-label");
