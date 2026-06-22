@@ -1,0 +1,111 @@
+@llamacppHost = http://localhost:8080
+
+@llamacppModel = ggml-org/gemma-4-E2B-it-GGUF:Q8_0
+
+
+
+### Probe models (used by Alelo auto-detect)
+
+GET {{llamacppHost}}/v1/models
+
+Accept: application/json
+
+
+
+###
+
+
+
+### Completions (Alelo default llama.cpp endpoint)
+
+POST {{llamacppHost}}/v1/completions
+
+Content-Type: application/json
+
+
+
+{
+
+  "model": "{{llamacppModel}}",
+
+  "prompt": "Why is the sky blue?",
+
+  "max_tokens": 200,
+
+  "temperature": 1,
+
+  "stream": false
+
+}
+
+
+
+###
+
+
+
+### Translation-style prompt (Alelo)
+
+POST {{llamacppHost}}/v1/completions
+
+Content-Type: application/json
+
+
+
+{
+
+  "model": "{{llamacppModel}}",
+
+  "prompt": "System: You are a translation assistant. Reply with ONLY the translated text.\n\nUser: Translate the following text to Spanish (es):\n\nHello\n\nAssistant:",
+
+  "max_tokens": 512,
+
+  "temperature": 1,
+
+  "stream": false
+
+}
+
+
+
+###
+
+
+
+### Chat completions (OpenAI-compatible, optional)
+
+POST {{llamacppHost}}/v1/chat/completions
+
+Content-Type: application/json
+
+
+
+{
+
+  "model": "{{llamacppModel}}",
+
+  "stream": false,
+
+  "messages": [
+
+    {
+
+      "role": "system",
+
+      "content": "You are a translation assistant. Reply with ONLY the translated text."
+
+    },
+
+    {
+
+      "role": "user",
+
+      "content": "Translate the following text to Spanish (es):\n\nHello"
+
+    }
+
+  ]
+
+}
+
+

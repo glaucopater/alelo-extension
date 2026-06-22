@@ -1,6 +1,14 @@
 {
+  "name": "alelo-extension",
   "private": true,
   "scripts": {
-    "icons": "yarn dlx @resvg/resvg-js-cli icons/icon.svg icons/icon-128.png --fit-width 128 && yarn dlx @resvg/resvg-js-cli icons/icon.svg icons/icon-48.png --fit-width 48 && yarn dlx @resvg/resvg-js-cli icons/icon.svg icons/icon-32.png --fit-width 32 && yarn dlx @resvg/resvg-js-cli icons/icon.svg icons/icon-16.png --fit-width 16"
+    "icons": "yarn dlx @resvg/resvg-js-cli icons/icon.svg icons/icon-128.png --fit-width 128 && yarn dlx @resvg/resvg-js-cli icons/icon.svg icons/icon-48.png --fit-width 48 && yarn dlx @resvg/resvg-js-cli icons/icon.svg icons/icon-32.png --fit-width 32 && yarn dlx @resvg/resvg-js-cli icons/icon.svg icons/icon-16.png --fit-width 16",
+    "test": "node --test tests/llm-api.test.js",
+    "test:integration": "node --test tests/llm-api.integration.test.js",
+    "test:all": "node --test tests/llm-api.test.js tests/llm-api.integration.test.js",
+    "benchmark": "node scripts/benchmark-llm.js",
+    "benchmark:test": "node --test tests/benchmark.test.js",
+    "pack:ext": "node scripts/pack-extension.js",
+    "build": "yarn test && yarn pack:ext"
   }
 }

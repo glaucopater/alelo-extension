@@ -1,0 +1,54 @@
+@ollamaHost = http://localhost:11434
+@ollamaModel = gemma4:e2b
+
+### Probe models (used by Alelo auto-detect)
+GET {{ollamaHost}}/api/tags
+Accept: application/json
+
+###
+
+### Alternative models list
+GET {{ollamaHost}}/api/models
+Accept: application/json
+
+###
+
+### Chat completion (Alelo default endpoint)
+POST {{ollamaHost}}/api/chat
+Content-Type: application/json
+
+{
+  "model": "{{ollamaModel}}",
+  "stream": false,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a translation assistant. Reply with ONLY the translated text."
+    },
+    {
+      "role": "user",
+      "content": "Translate the following text to Spanish (es):\n\nHello"
+    }
+  ]
+}
+
+###
+
+### Source language detection (Alelo)
+POST {{ollamaHost}}/api/chat
+Content-Type: application/json
+
+{
+  "model": "{{ollamaModel}}",
+  "stream": false,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You identify the language of text. Reply with ONLY valid JSON: {\"code\":\"bcp47\",\"label\":\"English name\"}."
+    },
+    {
+      "role": "user",
+      "content": "What language is this text?\n\nBonjour le monde"
+    }
+  ]
+}

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Alelo",
-  "version": "0.2.2",
-  "description": "Translate selected text in the browser using a local Ollama chat API.",
+  "version": "0.4.4",
+  "description": "Translate selected text in the browser using a local LLM chat API.",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -26,10 +26,14 @@
     "tabs",
     "scripting",
     "activeTab",
-    "storage"
+    "storage",
+    "declarativeNetRequest"
   ],
   "host_permissions": [
     "http://localhost:11434/*",
+    "http://127.0.0.1:11434/*",
+    "http://localhost:8080/*",
+    "http://127.0.0.1:8080/*",
     "http://*/*",
     "https://*/*"
   ],
@@ -38,5 +42,14 @@
       "resources": ["content.html", "content.css"],
       "matches": ["<all_urls>"]
     }
-  ]
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "local_llm",
+        "enabled": true,
+        "path": "rules/local-llm.json"
+      }
+    ]
+  }
 }

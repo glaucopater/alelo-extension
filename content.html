@@ -75,8 +75,16 @@
             <button type="button" id="alelo-settings-close-btn" class="alelo-btn alelo-icon-btn" aria-label="Close settings" title="Close">×</button>
           </div>
       <label class="alelo-field">
+        <span>Provider</span>
+        <select id="alelo-config-provider" class="alelo-select alelo-input">
+          <option value="ollama">Ollama</option>
+          <option value="llamacpp">llama.cpp</option>
+        </select>
+        <p class="alelo-field-hint">Ollama uses <code>/api/chat</code>; llama.cpp uses <code>/v1/completions</code> or <code>/v1/chat/completions</code>.</p>
+      </label>
+      <label class="alelo-field">
         <span>API URL</span>
-        <input type="url" id="alelo-config-api-url" class="alelo-input" placeholder="http://localhost:11434/api/chat" />
+        <input type="url" id="alelo-config-api-url" class="alelo-input" placeholder="http://127.0.0.1:11434/api/chat" />
       </label>
       <label class="alelo-field">
         <span>Model</span>
@@ -94,8 +102,22 @@
         <p id="alelo-config-models-status" class="alelo-field-hint"></p>
       </label>
       <label class="alelo-field">
+        <span>Temperature</span>
+        <input
+          type="number"
+          id="alelo-config-temperature"
+          class="alelo-input"
+          min="0"
+          max="2"
+          step="0.1"
+          inputmode="decimal"
+        />
+        <p class="alelo-field-hint">Sampling temperature (0–2). Default is 1 for llama.cpp-style servers; try 0.2–0.5 for more deterministic translations.</p>
+      </label>
+      <label class="alelo-field">
         <span>Auth token (optional)</span>
         <input type="password" id="alelo-config-auth-token" class="alelo-input" placeholder="Leave empty if not required" autocomplete="off" />
+        <p class="alelo-field-hint">Leave empty for local Ollama. If you see “Ollama blocked the extension”, set the <code>OLLAMA_ORIGINS</code> environment variable (see README), not a token here.</p>
       </label>
 
       <div class="alelo-field alelo-field-favorites">

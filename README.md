@@ -65,7 +65,7 @@ flowchart LR
 
   See the [Ollama model library](https://ollama.com/library) for other text models.
 
-- **CORS for extensions** — start Ollama with origins that allow the extension:
+- **CORS for extensions** — Alelo strips the `Origin` header on local Ollama/llama.cpp requests so you usually **do not** need extra setup. If you still see HTTP 403 from Ollama, allow extension origins:
 
   Unix-like / macOS:
 

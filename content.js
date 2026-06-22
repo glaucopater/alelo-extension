@@ -25,7 +25,9 @@
   let historyEmpty = null;
   let historyClearBtn = null;
   let configApiUrl = null;
+  let configProvider = null;
   let configModel = null;
+  let configTemperature = null;
   let configModelsRefreshBtn = null;
   let configModelMeta = null;
   let configModelsStatus = null;
@@ -136,6 +138,17 @@
     }
   }
 
+  function formatHistoryEndpoint(apiUrl) {
+    const value = String(apiUrl || "").trim();
+    if (!value) return "";
+    try {
+      const parsed = new URL(value);
+      return `${parsed.host}${parsed.pathname}`;
+    } catch {
+      return value;
+    }
+  }
+
   function describePageSource(pageUrl) {
     const url = String(pageUrl || "").trim();
     if (!url) return { label: "", html: "" };
@@ -170,25 +183,72 @@
     return `${(ms / 1000).toFixed(1)} s`;
   }
 
+  function extractDurationMs(parsed) {
+    if (!parsed || typeof parsed !== "object") return null;
+
+    if (parsed.total_duration != null) {
+      return parsed.total_duration / 1e6;
+    }
+
+    const timings = parsed.timings;
+    if (timings && (timings.prompt_ms != null || timings.predicted_ms != null)) {
+      return (timings.prompt_ms ?? 0) + (timings.predicted_ms ?? 0);
+    }
+
+    if (parsed.aleloDurationMs != null) {
+      return Number(parsed.aleloDurationMs);
+    }
+
+    return null;
+  }
+
   function extractStatsFromRaw(rawJsonText) {
     try {
       const parsed = JSON.parse(rawJsonText);
-      const promptTokens = parsed?.prompt_eval_count;
-      const outputTokens = parsed?.eval_count;
-      const totalNs = parsed?.total_duration;
-      const hasTokens = promptTokens != null || outputTokens != null;
-      const prompt = promptTokens ?? 0;
-      const output = outputTokens ?? 0;
+
+      const usage = parsed?.usage;
+      let promptTokens = parsed?.prompt_eval_count ?? null;
+      let outputTokens = parsed?.eval_count ?? null;
+      let totalTokens = null;
+
+      if (usage && (usage.prompt_tokens != null || usage.completion_tokens != null)) {
+        promptTokens = usage.prompt_tokens ?? null;
+        outputTokens = usage.completion_tokens ?? null;
+        const prompt = promptTokens ?? 0;
+        const output = outputTokens ?? 0;
+        totalTokens =
+          usage.total_tokens ??
+          (usage.prompt_tokens != null || usage.completion_tokens != null ? prompt + output : null);
+      } else if (promptTokens != null || outputTokens != null) {
+        const prompt = promptTokens ?? 0;
+        const output = outputTokens ?? 0;
+        totalTokens = prompt + output;
+      }
+
+      const durationMs = extractDurationMs(parsed);
+
+      if (durationMs == null && totalTokens == null) {
+        return null;
+      }
 
       return {
-        durationMs: totalNs != null ? totalNs / 1e6 : null,
-        promptTokens: promptTokens ?? null,
-        outputTokens: outputTokens ?? null,
-        totalTokens: hasTokens ? prompt + output : null
+        durationMs,
+        promptTokens,
+        outputTokens,
+        totalTokens
       };
     } catch {
       return null;
     }
+  }
+
+  function historyEntryStats(entry) {
+    const translations = normalizeHistoryTranslations(entry);
+    for (const item of translations) {
+      const stats = extractStatsFromRaw(item.rawJsonText || "");
+      if (stats?.durationMs != null || stats?.totalTokens != null) return stats;
+    }
+    return extractStatsFromRaw(entry.rawJsonText || "");
   }
 
   function historySummary(entry) {
@@ -206,7 +266,10 @@
     }
     const host = pageHostname(entry.pageUrl);
     if (host) parts.push(host);
-    const stats = extractStatsFromRaw(entry.rawJsonText || "");
+    if (entry.model) parts.push(truncateText(entry.model, 48));
+    const endpoint = formatHistoryEndpoint(entry.apiUrl);
+    if (endpoint) parts.push(endpoint);
+    const stats = historyEntryStats(entry);
     const duration = formatDuration(stats?.durationMs);
     if (duration) parts.push(duration);
     return parts.join(" · ") || "Saved translation";
@@ -779,6 +842,9 @@
       translatedText: buildCopyText(successes),
       targetLanguage: successes[0]?.targetLanguage || null,
       pageUrl: entry.pageUrl || "",
+      model: String(entry.model || "").trim(),
+      apiUrl: String(entry.apiUrl || "").trim(),
+      provider: String(entry.provider || "").trim(),
       rawJsonText: buildRawJson(translations)
     };
 
@@ -1303,7 +1369,9 @@
     historyEmpty = root.querySelector("#alelo-history-empty");
     historyClearBtn = root.querySelector("#alelo-history-clear-btn");
     configApiUrl = root.querySelector("#alelo-config-api-url");
+    configProvider = root.querySelector("#alelo-config-provider");
     configModel = root.querySelector("#alelo-config-model");
+    configTemperature = root.querySelector("#alelo-config-temperature");
     configModelsRefreshBtn = root.querySelector("#alelo-config-models-refresh-btn");
     configModelMeta = root.querySelector("#alelo-config-model-meta");
     configModelsStatus = root.querySelector("#alelo-config-models-status");
@@ -1330,6 +1398,60 @@
     composerWrap = root.querySelector("#alelo-composer-wrap");
     translateBtn = root.querySelector("#alelo-translate-btn");
     composerHint = root.querySelector("#alelo-composer-hint");
+  }
+
+  function isStoredOllamaModel(modelName) {
+    const name = String(modelName || "").trim();
+    return !name || name === DEFAULT_MODEL || LEGACY_DEFAULT_MODELS.includes(name);
+  }
+
+  function pickLlamaCppModel(selectedModel = "") {
+    const preferred = String(selectedModel || "").trim();
+    if (preferred && availableModels.some((model) => model.name === preferred)) {
+      return preferred;
+    }
+    if (availableModels.length) {
+      return availableModels[0].name;
+    }
+    return DEFAULT_LLAMACPP_MODEL;
+  }
+
+  function getSelectedProvider() {
+    const value = configProvider?.value || LLM_PROVIDER.OLLAMA;
+    return value === LLM_PROVIDER.LLAMACPP ? LLM_PROVIDER.LLAMACPP : LLM_PROVIDER.OLLAMA;
+  }
+
+  function updateApiUrlPlaceholder() {
+    if (!configApiUrl) return;
+    const preset = PROVIDER_PRESETS[getSelectedProvider()];
+    configApiUrl.placeholder = preset?.apiUrl || DEFAULT_API_URL;
+  }
+
+  function applyProviderPreset({ forceUrl = false } = {}) {
+    if (!configProvider || !configApiUrl) return;
+
+    const provider = getSelectedProvider();
+    const preset = PROVIDER_PRESETS[provider];
+    if (!preset) return;
+
+    updateApiUrlPlaceholder();
+
+    const currentUrl = configApiUrl.value.trim();
+    const otherUrls = Object.values(PROVIDER_PRESETS)
+      .map((item) => item.apiUrl)
+      .filter((url) => url !== preset.apiUrl);
+
+    if (forceUrl || !currentUrl || otherUrls.includes(currentUrl)) {
+      configApiUrl.value = preset.apiUrl;
+    }
+  }
+
+  function onProviderChange({ forceUrl = false } = {}) {
+    applyProviderPreset({ forceUrl });
+    if (getSelectedProvider() === LLM_PROVIDER.LLAMACPP) {
+      storedModelInfo = null;
+    }
+    loadModelsList({ preserveSelection: false, selectedModel: "" });
   }
 
   function formatModelOptionLabel(model) {
@@ -1391,8 +1513,13 @@
     }
 
     if (!models.length) {
-      configModel.innerHTML = `<option value="">No models available</option>`;
-      configModel.disabled = true;
+      const fallbackModel =
+        getSelectedProvider() === LLM_PROVIDER.LLAMACPP ? DEFAULT_LLAMACPP_MODEL : "";
+      const emptyLabel = fallbackModel
+        ? `Default (${fallbackModel})`
+        : "No models available";
+      configModel.innerHTML = `<option value="${escapeHtml(fallbackModel)}" selected>${escapeHtml(emptyLabel)}</option>`;
+      configModel.disabled = false;
       updateModelMetaDisplay();
       return;
     }
@@ -1421,7 +1548,7 @@
       return;
     }
 
-    const activeModel = preserveSelection
+    let activeModel = preserveSelection
       ? selectedModel || configModel.value || storedModelInfo?.name || ""
       : selectedModel;
     isLoadingModels = true;
@@ -1432,11 +1559,19 @@
       const response = await chrome.runtime.sendMessage({
         action: MESSAGE_ACTION.FETCH_MODELS,
         apiUrl,
-        authToken: configAuthToken?.value.trim() || ""
+        authToken: configAuthToken?.value.trim() || "",
+        provider: getSelectedProvider()
       });
 
       if (response?.ok && Array.isArray(response.models)) {
         availableModels = response.models;
+
+        if (getSelectedProvider() === LLM_PROVIDER.LLAMACPP) {
+          if (!activeModel || isStoredOllamaModel(activeModel)) {
+            activeModel = pickLlamaCppModel(activeModel);
+          }
+        }
+
         renderModelSelect(activeModel);
         setModelsStatus(
           response.models.length
@@ -1445,11 +1580,17 @@
         );
       } else {
         availableModels = [];
+        if (getSelectedProvider() === LLM_PROVIDER.LLAMACPP && isStoredOllamaModel(activeModel)) {
+          activeModel = "";
+        }
         renderModelSelect(activeModel);
         setModelsStatus(response?.error || "Could not load models", true);
       }
     } catch (error) {
       availableModels = [];
+      if (getSelectedProvider() === LLM_PROVIDER.LLAMACPP && isStoredOllamaModel(activeModel)) {
+        activeModel = "";
+      }
       renderModelSelect(activeModel);
       setModelsStatus(error?.message || "Could not load models", true);
     } finally {
@@ -1462,8 +1603,15 @@
     try {
       const response = await chrome.runtime.sendMessage({ action: MESSAGE_ACTION.GET_CONFIG });
       if (response?.ok && response.config) {
-        configApiUrl.value = response.config.apiUrl || "";
-        configAuthToken.value = response.config.authToken || "";
+        if (configProvider) {
+          configProvider.value = response.config.provider || LLM_PROVIDER.OLLAMA;
+        }
+        if (configApiUrl) configApiUrl.value = response.config.apiUrl || "";
+        updateApiUrlPlaceholder();
+        if (configAuthToken) configAuthToken.value = response.config.authToken || "";
+        if (configTemperature) {
+          configTemperature.value = String(response.config.temperature ?? DEFAULT_TEMPERATURE);
+        }
         storedModelInfo = response.config.modelInfo || null;
         languagePresets = response.languagePresets || [];
         draftFavoriteLanguages = (response.config.favoriteLanguages || []).map((lang) => ({
@@ -1472,29 +1620,50 @@
         }));
         renderFavoritesList();
         populatePresetPicker();
+
+        let selectedModel = response.config.model || "";
+        if (
+          (response.config.provider || LLM_PROVIDER.OLLAMA) === LLM_PROVIDER.LLAMACPP &&
+          isStoredOllamaModel(selectedModel)
+        ) {
+          selectedModel = "";
+        }
+
         await loadModelsList({
-          preserveSelection: true,
-          selectedModel: response.config.model || ""
+          preserveSelection: Boolean(selectedModel),
+          selectedModel
         });
       }
-    } catch {
-      // Settings unavailable — form stays empty
+    } catch (error) {
+      console.error("Alelo: failed to load settings", error);
     }
   }
 
   async function saveConfig() {
     const selectedModel = getSelectedModelEntry();
     const config = {
+      provider: getSelectedProvider(),
       apiUrl: configApiUrl.value.trim(),
       model: (configModel?.value || selectedModel?.name || "").trim(),
       modelInfo: selectedModel,
       authToken: configAuthToken.value.trim(),
+      temperature: Number(configTemperature?.value),
+      configSource: "user",
       favoriteLanguages: draftFavoriteLanguages
     };
 
-    if (!config.apiUrl || !config.model) {
-      configStatus.textContent = "API URL and model are required";
+    if (!config.apiUrl) {
+      configStatus.textContent = "API URL is required";
       return;
+    }
+
+    if (!config.model && getSelectedProvider() === LLM_PROVIDER.OLLAMA) {
+      configStatus.textContent = "Model is required for Ollama";
+      return;
+    }
+
+    if (!config.model && getSelectedProvider() === LLM_PROVIDER.LLAMACPP) {
+      config.model = DEFAULT_LLAMACPP_MODEL;
     }
 
     if (!config.favoriteLanguages.length) {
@@ -1614,6 +1783,7 @@
       }
     });
     configSaveBtn.addEventListener("click", saveConfig);
+    configProvider?.addEventListener("change", () => onProviderChange({ forceUrl: true }));
     configModelsRefreshBtn?.addEventListener("click", () => loadModelsList({ preserveSelection: true }));
     configModel?.addEventListener("change", updateModelMetaDisplay);
     configApiUrl?.addEventListener("change", () => loadModelsList({ preserveSelection: true }));
@@ -1846,7 +2016,10 @@
       sourceText: lastSourceText,
       sourceLanguage: lastSourceLanguage,
       translations,
-      pageUrl: lastPageUrl
+      pageUrl: lastPageUrl,
+      model: payload?.model,
+      apiUrl: payload?.apiUrl,
+      provider: payload?.provider
     });
   };
 

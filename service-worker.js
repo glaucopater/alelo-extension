@@ -1,4 +1,4 @@
-importScripts("constants.js", "config.js", "language-flags.js");
+importScripts("constants.js", "llm-api.js", "config.js", "language-flags.js");
 
 const flagImageCache = new Map();
 
@@ -86,33 +86,71 @@ function parseSourceLanguageResponse(text) {
 
 function formatErrorMessage(error, context = {}) {
   const msg = error?.message || String(error);
+  const provider = context.provider || LLM_PROVIDER.OLLAMA;
+  const apiUrl = String(context.apiUrl || "").trim();
 
   if (msg === "Failed to fetch" || (error?.name === "TypeError" && /fetch/i.test(msg))) {
+    const hints = {
+      [LLM_PROVIDER.OLLAMA]:
+        "Start Ollama (`ollama serve`) and confirm http://localhost:11434/api/tags responds in a browser or .http file.",
+      [LLM_PROVIDER.LLAMACPP]:
+        "Start llama.cpp (e.g. `llama-server -m model.gguf --port 8080`) and confirm http://localhost:8080/v1/models responds."
+    };
+    const urlHint = apiUrl ? `\n\nConfigured URL: ${apiUrl}` : "";
     return {
       title: "Cannot reach the API",
-      message: "The translation server did not respond. Check that it is running and that the API URL in Settings is correct.",
-      hint: "For Ollama, start it with OLLAMA_ORIGINS=chrome-extension://* so the extension can connect."
+      message: apiUrl
+        ? `The translation server did not respond at ${apiUrl}.`
+        : "The translation server did not respond. Check that it is running and that the API URL in Settings is correct.",
+      hint: `${hints[provider] || hints[LLM_PROVIDER.OLLAMA]}${urlHint}\n\nOpen Settings (gear) to switch provider or refresh the model list.`
     };
   }
 
-  if (msg.startsWith("Ollama error 404")) {
+  if (msg.startsWith("API error 404")) {
     const model = context.model ? ` "${context.model}"` : "";
+    const hints = {
+      [LLM_PROVIDER.OLLAMA]:
+        "Run `ollama list` in a terminal and copy the NAME column into Settings → Model (e.g. gemma4:e2b).",
+      [LLM_PROVIDER.LLAMACPP]:
+        "Refresh the model list in Settings and pick the model loaded in llama.cpp, or check the name matches /v1/models."
+    };
+    const messages = {
+      [LLM_PROVIDER.OLLAMA]: `The model${model} is not installed or the name does not match Ollama exactly.`,
+      [LLM_PROVIDER.LLAMACPP]: `The model${model} was not found on the llama.cpp server.`
+    };
     return {
       title: "Model not found",
-      message: `The model${model} is not installed or the name does not match Ollama exactly.`,
-      hint: "Run `ollama list` in a terminal and copy the NAME column into Settings → Model (e.g. gemma4:e2b)."
+      message: messages[provider] || messages[LLM_PROVIDER.OLLAMA],
+      hint: hints[provider] || hints[LLM_PROVIDER.OLLAMA]
     };
   }
 
-  if (msg.startsWith("Ollama error 401") || msg.startsWith("Ollama error 403")) {
+  if (msg.startsWith("API error 401") || msg.startsWith("API error 403")) {
+    const isOllamaApi =
+      provider === LLM_PROVIDER.OLLAMA ||
+      /:11434\b/.test(apiUrl) ||
+      /\/api\/chat/.test(apiUrl);
+
+    if (msg.startsWith("API error 403") && isOllamaApi) {
+      return {
+        title: "Ollama blocked the extension",
+        message:
+          "Ollama rejected the request because the browser extension origin is not allowed (HTTP 403). This is not an auth token problem.",
+        hint:
+          "On Windows: add a user environment variable OLLAMA_ORIGINS with value * (or chrome-extension://*), then fully quit and restart Ollama from the system tray.\n\n" +
+          "In Settings, use API URL http://127.0.0.1:11434/api/chat and leave Auth token empty.\n\n" +
+          "See README → CORS for extensions."
+      };
+    }
+
     return {
       title: "Authentication failed",
       message: "The API rejected the request. Check your auth token in Settings.",
-      hint: ""
+      hint: apiUrl ? `Configured URL: ${apiUrl}` : ""
     };
   }
 
-  if (msg.startsWith("Ollama error 5")) {
+  if (msg.startsWith("API error 5")) {
     return {
       title: "Server error",
       message: "The translation server returned an error. Check the server logs for details.",
@@ -120,7 +158,7 @@ function formatErrorMessage(error, context = {}) {
     };
   }
 
-  if (msg.startsWith("Ollama error")) {
+  if (msg.startsWith("API error")) {
     return {
       title: "API error",
       message: msg,
@@ -135,12 +173,56 @@ function formatErrorMessage(error, context = {}) {
   };
 }
 
-async function injectContentScript(tabId) {
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    files: ["constants.js", "language-flags.js", "content.js"]
-  });
+async function isContentScriptReady(tabId) {
+  try {
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => typeof globalThis.__aleloShowLoading === "function"
+    });
+    return Boolean(result?.result);
+  } catch {
+    return false;
+  }
 }
+
+const injectedContentTabs = new Set();
+const injectingContentTabs = new Set();
+
+async function injectContentScript(tabId) {
+  if (injectedContentTabs.has(tabId) || injectingContentTabs.has(tabId)) {
+    return;
+  }
+
+  if (await isContentScriptReady(tabId)) {
+    injectedContentTabs.add(tabId);
+    return;
+  }
+
+  injectingContentTabs.add(tabId);
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["constants.js", "language-flags.js", "content.js"]
+    });
+    injectedContentTabs.add(tabId);
+  } catch {
+    injectedContentTabs.delete(tabId);
+  } finally {
+    injectingContentTabs.delete(tabId);
+  }
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  injectedContentTabs.delete(tabId);
+  injectingContentTabs.delete(tabId);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "loading") {
+    injectedContentTabs.delete(tabId);
+    injectingContentTabs.delete(tabId);
+  }
+});
 
 async function showLoading(tabId, payload) {
   await injectContentScript(tabId);
@@ -232,149 +314,21 @@ async function getTabSelectionText(tabId) {
   }
 }
 
-function deriveModelsEndpointUrls(apiUrl) {
-  const trimmed = String(apiUrl || "").trim();
-  if (!trimmed) return [];
-
-  const urls = [];
-  try {
-    const parsed = new URL(trimmed);
-    const origin = parsed.origin;
-
-    if (/\/api\/chat\/?$/i.test(parsed.pathname)) {
-      parsed.pathname = parsed.pathname.replace(/\/api\/chat\/?$/i, "/api/models");
-      urls.push(parsed.href);
-    } else if (/\/chat\/?$/i.test(parsed.pathname)) {
-      parsed.pathname = parsed.pathname.replace(/\/chat\/?$/i, "/models");
-      urls.push(parsed.href);
-    }
-
-    urls.push(`${origin}/api/models`, `${origin}/models`, `${origin}/api/tags`, `${origin}/v1/models`);
-  } catch {
-    return [];
-  }
-
-  return [...new Set(urls.filter(Boolean))];
-}
-
-function normalizeModelEntry(entry) {
-  if (typeof entry === "string") {
-    const name = entry.trim();
-    return name ? { name } : null;
-  }
-
-  const name = String(entry?.name || entry?.model || entry?.id || "").trim();
-  if (!name) return null;
-
-  const details = entry?.details && typeof entry.details === "object" ? entry.details : {};
-  return {
-    name,
-    parameterSize: String(details.parameter_size || entry?.parameter_size || "").trim(),
-    quantizationLevel: String(details.quantization_level || entry?.quantization_level || "").trim(),
-    family: String(details.family || entry?.family || "").trim(),
-    size: typeof entry?.size === "number" ? entry.size : null,
-    modifiedAt: String(entry?.modified_at || entry?.modifiedAt || "").trim()
-  };
-}
-
-function normalizeModelsPayload(data) {
-  if (!data) return [];
-
-  if (Array.isArray(data)) {
-    return data.map(normalizeModelEntry).filter(Boolean);
-  }
-
-  if (Array.isArray(data.models)) {
-    return data.models.map(normalizeModelEntry).filter(Boolean);
-  }
-
-  if (Array.isArray(data.data)) {
-    return data.data.map((item) => normalizeModelEntry({ name: item?.id, ...item })).filter(Boolean);
-  }
-
-  return [];
-}
-
-async function fetchAvailableModels(apiUrl, authToken) {
-  const headers = { Accept: "application/json" };
-  if (authToken) {
-    headers.Authorization = `Bearer ${authToken}`;
-  }
-
-  const urls = deriveModelsEndpointUrls(apiUrl);
-  let lastError = "Could not load models";
-
-  for (const url of urls) {
-    try {
-      const response = await fetch(url, { headers });
-      if (!response.ok) {
-        lastError = `HTTP ${response.status} from ${url}`;
-        continue;
-      }
-
-      const data = await response.json();
-      const models = normalizeModelsPayload(data);
-      if (models.length) {
-        return { ok: true, models, endpoint: url };
-      }
-
-      lastError = `No models returned from ${url}`;
-    } catch (error) {
-      lastError = error?.message || lastError;
-    }
-  }
-
-  return { ok: false, error: lastError, models: [] };
-}
-
-async function chatCompletion(config, messages) {
-  const payload = {
-    model: config.model,
-    stream: false,
-    messages
-  };
-
-  const headers = { "Content-Type": "application/json" };
-  if (config.authToken) {
-    headers.Authorization = `Bearer ${config.authToken}`;
-  }
-
-  const response = await fetch(config.apiUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload)
-  });
-
-  const raw = await response.text();
-
-  if (!response.ok) {
-    throw new Error(`Ollama error ${response.status}: ${raw || "No response body"}`);
-  }
-
-  let content = raw;
-  let rawJsonText = raw;
-
-  try {
-    const parsed = JSON.parse(raw);
-    rawJsonText = JSON.stringify(parsed, null, 2);
-    content = parsed?.message?.content ?? raw;
-  } catch {
-    rawJsonText = raw;
-    content = raw;
-  }
-
-  return {
-    content: String(content || "").trim(),
-    rawJsonText
-  };
-}
-
 async function requestSourceLanguage(config, sourceText) {
   const { content } = await chatCompletion(config, [
     { role: "system", content: SOURCE_LANGUAGE_SYSTEM_PROMPT },
     { role: "user", content: buildSourceLanguagePrompt(sourceText) }
   ]);
   return parseSourceLanguageResponse(content);
+}
+
+function llmHistoryFields(config) {
+  if (!config) return {};
+  return {
+    model: String(config.model || "").trim(),
+    apiUrl: String(config.apiUrl || "").trim(),
+    provider: String(config.provider || "").trim()
+  };
 }
 
 async function requestTranslation(config, sourceText, targetLanguage, sourceLanguage = null) {
@@ -439,7 +393,7 @@ async function translateLanguages(tabId, sourceText, targetLanguages, pageUrl) {
       parallel: langs.length > 1
     });
 
-    config = await getStoredConfig();
+    config = await resolveActiveConfig();
 
     const sourceLanguagePromise = requestSourceLanguage(config, trimmedSource)
       .then(async (sourceLanguage) => {
@@ -472,7 +426,8 @@ async function translateLanguages(tabId, sourceText, targetLanguages, pageUrl) {
           sourceLanguage,
           targetLanguages: langs,
           pageUrl: pageUrl || "",
-          translations: [{ ok: true, ...result }]
+          translations: [{ ok: true, ...result }],
+          ...llmHistoryFields(config)
         });
       } catch (error) {
         await showError(tabId, {
@@ -480,7 +435,11 @@ async function translateLanguages(tabId, sourceText, targetLanguages, pageUrl) {
           sourceLanguage: await sourceLanguagePromise.catch(() => null),
           targetLanguages: langs,
           pageUrl: pageUrl || "",
-          errorInfo: formatErrorMessage(error, { model: config.model })
+          errorInfo: formatErrorMessage(error, {
+            model: config.model,
+            provider: config.provider,
+            apiUrl: config.apiUrl
+          })
         });
       }
       return;
@@ -500,7 +459,11 @@ async function translateLanguages(tabId, sourceText, targetLanguages, pageUrl) {
           item = {
             ok: false,
             targetLanguage: lang,
-            errorInfo: formatErrorMessage(error, { model: config.model })
+            errorInfo: formatErrorMessage(error, {
+            model: config.model,
+            provider: config.provider,
+            apiUrl: config.apiUrl
+          })
           };
         }
 
@@ -540,7 +503,8 @@ async function translateLanguages(tabId, sourceText, targetLanguages, pageUrl) {
       targetLanguages: langs,
       pageUrl: pageUrl || "",
       translations: results,
-      finalizeOnly: true
+      finalizeOnly: true,
+      ...llmHistoryFields(config)
     });
   } catch (error) {
     try {
@@ -548,7 +512,11 @@ async function translateLanguages(tabId, sourceText, targetLanguages, pageUrl) {
         sourceText: trimmedSource,
         targetLanguages: langs,
         pageUrl: pageUrl || "",
-        errorInfo: formatErrorMessage(error, { model: config?.model })
+        errorInfo: formatErrorMessage(error, {
+          model: config?.model,
+          provider: config?.provider,
+          apiUrl: config?.apiUrl
+        })
       });
     } catch (innerError) {
       console.error("Failed to display error in modal:", innerError);
@@ -588,7 +556,7 @@ async function rebuildContextMenus() {
 }
 
 async function initializeExtension() {
-  await getStoredConfig();
+  await resolveActiveConfig();
   await rebuildContextMenus();
 }
 
@@ -653,7 +621,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === MESSAGE_ACTION.GET_CONFIG) {
-    getStoredConfig().then((config) =>
+    resolveActiveConfig().then((config) =>
       sendResponse({ ok: true, config, languagePresets: LANGUAGES_PRESET })
     );
     return true;
@@ -667,7 +635,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === MESSAGE_ACTION.FETCH_MODELS) {
-    fetchAvailableModels(message.apiUrl, message.authToken)
+    fetchAvailableModels(message.apiUrl, message.authToken, message.provider)
       .then((result) => sendResponse(result))
       .catch((error) => sendResponse({ ok: false, error: error?.message || "Could not load models", models: [] }));
     return true;
